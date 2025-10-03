@@ -15,14 +15,10 @@ if not TOKEN:
 UPLOAD_DIR = "uploads"
 
 # --- CẤU HÌNH LOGGING ---
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-
-# --- CẤU HÌNH TESSERACT ---
-TESSERACT_CONFIG = r'--oem 3 --psm 6'
-TESSERACT_LANG = 'vie+eng'  # Ngôn ngữ tiếng Việt và tiếng Anh
+# logging.basicConfig(
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+#     level=logging.INFO
+# )
 
 # Hàm khởi tạo các thư mục cần thiết
 def initialize_directories():

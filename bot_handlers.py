@@ -37,10 +37,9 @@ def parse_amount_string(s: str) -> float | None:
         # Trả về None nếu có lỗi xảy ra (vd: 'abc', '5m2k')
         return None
     
-# --- PHOTO HANDLER (Giữ nguyên) ---
+# --- PHOTO HANDLER ---
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Xử lý tin nhắn chứa ảnh nhận được."""
-    # ... (Giữ nguyên toàn bộ code của hàm này)
     if not update.message or not update.message.photo:
         return
         
@@ -48,18 +47,17 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     file_path = None
 
     try:
-        await context.bot.send_message(chat_id=chat_id, text="Đã nhận được ảnh, tôi đang xử lý...")
+        await context.bot.send_message(chat_id=chat_id, text="Đã nhận được ảnh, đang xử lý...")
         
         photo_file = await update.message.photo[-1].get_file()
         unique_filename = f"{uuid.uuid4()}.jpg"
         file_path = os.path.join(UPLOAD_DIR, unique_filename)
         await photo_file.download_to_drive(file_path)
-        logging.info(f"Đã lưu ảnh tạm thời tại: {file_path}")
 
         detected_text = process_image_and_extract_text(file_path)
         
         if not detected_text.strip():
-            await context.bot.send_message(chat_id=chat_id, text="Rất tiếc, tôi không tìm thấy văn bản nào trong ảnh của bạn.")
+            await context.bot.send_message(chat_id=chat_id, text="Rất tiếc, tôi không tìm thấy văn bản nào trong ảnh của bạn hãy chụp hoá đơn rõ ràng hơn hoặc nhập bằng tay.")
         else:
             final_result = parse_text_for_info(detected_text)
             await context.bot.send_message(chat_id=chat_id, text=final_result)
@@ -73,7 +71,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             os.remove(file_path)
             logging.info(f"Đã xóa ảnh tạm thời: {file_path}")
 
-# --- TEXT HANDLER (Hàm mới) ---
+# --- TEXT HANDLER ---
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Xử lý tin nhắn văn bản, hỗ trợ số tiền dạng chữ và số viết tắt."""
     if not update.message or not update.message.text:
@@ -103,11 +101,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 return
 
             # Xử lý loại giao dịch
-            if loai_gd_char == 't':
+            if loai_gd_char == 't' or loai_gd_char == 'T':
                 loai_gd_full = "Thu nhập 📈"
-            else: # 'c'
+            if loai_gd_char == 'c' or loai_gd_char == 'C':
                 loai_gd_full = "Chi tiêu 📉"
-            
+            else:
+                loai_gd_full = "Không xác định ❓"
             # Định dạng lại số tiền để hiển thị cho đẹp
             formatted_amount = f"{numeric_amount:,.0f}".replace(",", ".")
 
@@ -123,6 +122,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             # Tin nhắn hướng dẫn giữ nguyên
             reminder_message = (
-                # ... (giữ nguyên tin nhắn hướng dẫn) ...
+                "⚠️ Định dạng tin nhắn không đúng\\. Vui lòng sử dụng định dạng sau\\:\n\n"
+                "`bot <t|c> <số tiền> <ghi chú>`\n\n"
+                "Ví dụ\\:\n"
+                "`bot t 50k Lương tháng 9`\\\n"
+                "`bot c 5m2 Mua điện thoại`"
             )
             await context.bot.send_message(chat_id=chat_id, text=reminder_message, parse_mode='MarkdownV2') #type: ignore
