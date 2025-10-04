@@ -3,7 +3,7 @@ import numpy as np
 import easyocr
 
 # Khởi tạo EasyOCR reader một lần để tái sử dụng
-reader = easyocr.Reader(['ch_sim','en'], gpu=False)
+reader = easyocr.Reader(['vi','en'], gpu=False)
 def process_image_and_extract_text(file_path: str) -> str:
 
     image_cv = cv2.imread(file_path)

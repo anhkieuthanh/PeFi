@@ -101,18 +101,17 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 return
 
             # Xử lý loại giao dịch
-            if loai_gd_char == 't' or loai_gd_char == 'T':
+            if loai_gd_char == 't':
                 loai_gd_full = "Thu nhập 📈"
-            if loai_gd_char == 'c' or loai_gd_char == 'C':
-                loai_gd_full = "Chi tiêu 📉"
             else:
-                loai_gd_full = "Không xác định ❓"
+                loai_gd_full = "Chi tiêu 📉"
+  
             # Định dạng lại số tiền để hiển thị cho đẹp
             formatted_amount = f"{numeric_amount:,.0f}".replace(",", ".")
 
             # Tạo và gửi tin nhắn phản hồi
             response_message = (
-                f"✅ Ghi nhận giao dịch thành công\\!\n\n"
+                f"✅ Ghi nhận giao dịch thành công !\n\n"
                 f"👀Loại: {loai_gd_full}\n"
                 f"💵Số tiền: {formatted_amount}\n"
                 f"📝Ghi chú: {ghi_chu}"
