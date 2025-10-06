@@ -1,0 +1,17 @@
+Extract all text fields from the uploaded string. 
+The ouput must be in a single JSON object with the following keys: 
+
+  "Name": "Tên quán",
+  "Date": "Ngày giao dịch",
+  "Amount": "Số tiền"
+  "Description": "Mô tả",
+  "Category": "Danh mục",
+  "Type": "Loai giao dịch"
+
+Example:
+  "Name": "DOOKKI Korean Topokki Buffet",
+  "Date": "01/10/2025",
+  "Amount": 300240,
+  "Description": "Payment for Korean Topokki Buffet (2 adults)",
+  "Category": "Ăn uống",
+  "Type": "Chi"
