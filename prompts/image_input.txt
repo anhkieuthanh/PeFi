@@ -1,9 +1,10 @@
 Extract all text fields from the uploaded image of the receipt. The output **MUST be a single JSON object** with the following keys:
-    1.  "Name": "Tên nhà hàng"
-    2.  "Date": "Ngày"
-    3.  "Amount": "Tổng thanh toán"
-    4.  "Description": "Mô tả ngắn gọn về giao dịch"
-    5.  "Category": "Danh mục (ăn uống, đi lại, mua sắm, v.v.)"
-    6.  "Type": "Thu/Chi"
+    1.  "merchant_name": "Tên nhà hàng"
+    2.  "bill_date": "Ngày"
+    3.  "total_amount": "Tổng thanh toán"
+    4.  "note": "Mô tả ngắn gọn về giao dịch"
+    5.  "category_name": "Danh mục (ăn uống, đi lại, mua sắm, v.v.)"
 
     Ensure the extracted numeric values are in plain numbers (without commas or currency symbols) where appropriate, and text is accurately transcribed 
+
+    If there is no transaction in the image. Fill all the fill with null
