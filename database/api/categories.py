@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from app.database import connect_to_heroku_db
 import psycopg2
+from .request_utils import parse_json_request
 
 categories_bp = Blueprint('categories_api', __name__)
 
@@ -31,7 +32,7 @@ def get_categories():
 @categories_bp.route('/categories', methods=['POST'])
 def add_category():
     """Thêm một danh mục mới."""
-    data = request.get_json()
+    data = parse_json_request()
     required_fields = ['user_id', 'category_name', 'category_type']
     if not data or not all(field in data for field in required_fields):
         return jsonify({"error": f"Thiếu trường bắt buộc. Cần có: {', '.join(required_fields)}"}), 400
@@ -43,6 +44,8 @@ def add_category():
     connection = None
     try:
         connection = connect_to_heroku_db()
+        if not connection:
+            return jsonify({"error": "Lỗi kết nối database"}), 500
         cursor = connection.cursor()
         cursor.execute(sql, (
             data['user_id'],
@@ -51,6 +54,10 @@ def add_category():
         ))
         new_category = cursor.fetchone()
         connection.commit()
+        if cursor.description is None or new_category is None:
+            cursor.close()
+            return jsonify({"error": "Không thể tạo danh mục"}), 500
+
         category_columns = [desc[0] for desc in cursor.description]
         new_category_json = dict(zip(category_columns, new_category))
         cursor.close()
@@ -67,7 +74,7 @@ def add_category():
 @categories_bp.route('/categories/<int:user_id>', methods=['DELETE'])
 def delete_category(user_id):
     """Xóa một danh mục."""
-    data = request.get_json()
+    data = parse_json_request()
     if not data or 'category_id' not in data:
         return jsonify({"error": "Thiếu trường 'category_id'"}), 400
 

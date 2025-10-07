@@ -1,0 +1,11 @@
+telegram:
+  token: "<your-telegram-token-here>"
+
+uploads:
+  dir: "uploads"
+
+google:
+  gemini_api_key: "<your-gemini-api-key-here>"
+
+api:
+  bills_url: "http://127.0.0.1:5000/api/v1/bills"
