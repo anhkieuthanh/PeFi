@@ -1,13 +1,3 @@
-"""Configuration loader: reads `config.yaml` and allows environment overrides.
-
-Priority: environment variables override values in config.yaml.
-This module exposes:
- - TOKEN (telegram bot token)
- - UPLOAD_DIR
- - GEMINI_API_KEY
- - client (genai client)
- - API_BILLS_URL
-"""
 import os
 import logging
 from pathlib import Path
@@ -16,9 +6,6 @@ from google import genai
 
 _have_yaml = False
 def _load_yaml_from_fileobj(f):
-    """Load YAML from a file-like object using available YAML library.
-    Tries PyYAML (yaml.safe_load) then ruamel.yaml as a fallback.
-    """
     global _have_yaml
     try:
         # Prefer PyYAML if available
@@ -88,6 +75,11 @@ client = genai.Client(api_key=str(GEMINI_API_KEY))
 
 # --- API URLs ---
 API_BILLS_URL = _get('api.bills_url', env_var='BILLS_API_URL', default='http://127.0.0.1:5000/api/v1/bills')
+
+
+# --- DATABASE ---
+_db_url_val = _get('database.url', env_var='DATABASE_URL')
+DATABASE_URL = str(_db_url_val) if _db_url_val is not None else None
 
 
 def validate_config():

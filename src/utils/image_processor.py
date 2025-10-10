@@ -23,7 +23,8 @@ def extract_text(file_path: str) -> str:
     prompt = read_prompt_from_file(get_prompt_path("image_input.txt"))
     response = client.models.generate_content(model="gemini-2.5-flash", contents=[prompt, image])
     processed_text = response.text
-    data = json.loads(processed_text[8:-4])
+    data = json.loads(processed_text[8:-4]) # type: ignore
+    # For testing, we set a fixed user_id; in real use this should come from the context
     data["user_id"] = 2
     print("Extracted text from image:", data)
     return data

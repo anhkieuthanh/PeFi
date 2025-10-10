@@ -62,7 +62,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         # send parsed payload to API as JSON (not a JSON string)
         async with httpx.AsyncClient() as client:
-            response = await client.post(API_BILLS_URL, json=parsed, timeout=30.0)
+            response = await client.post(API_BILLS_URL, json=parsed, timeout=30.0) # type: ignore
 
         logger.debug("API response status: %s", response.status_code)
         logger.debug("API response text: %s", response.text)
