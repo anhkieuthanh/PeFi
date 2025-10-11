@@ -1,5 +1,14 @@
 from flask import Blueprint, request, jsonify
-from app.database import connect_to_heroku_db
+# Robust import of DB connector regardless of CWD
+try:
+    from app.database import connect_to_heroku_db
+except Exception:
+    import sys
+    from pathlib import Path
+    db_root = Path(__file__).resolve().parents[1]  # .../database
+    if str(db_root) not in sys.path:
+        sys.path.insert(0, str(db_root))
+    from app.database import connect_to_heroku_db
 import psycopg2
 from .request_utils import parse_json_request
 import logging
@@ -15,20 +24,24 @@ def add_bill():
     """Thêm một hóa đơn mới."""
     data = parse_json_request()
     print("request data:", data)
-    required_fields = ['user_id', 'total_amount', 'category_name', 'bill_date','note','merchant_name']
+    required_fields = ['user_id', 'total_amount', 'category_name', 'category_type', 'bill_date','note','merchant_name']
     if not data or not all(field in data for field in required_fields):
         return jsonify({"error": "Thiếu trường bắt buộc"}), 400
 
+    # Idempotency: if header provided, store/check to avoid duplicates
+    idem_key = request.headers.get('Idempotency-Key')
+
     # Use %s placeholders for psycopg2 parameters (psycopg2 will adapt types)
     sql = """
-    INSERT INTO bills (user_id, total_amount, category_name, bill_date, note, merchant_name)
-    VALUES (%s, %s, %s, %s, %s, %s) RETURNING *;
+    INSERT INTO bills (user_id, total_amount, category_name, category_type, bill_date, note, merchant_name)
+    VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *;
     """
     values = (
         data['user_id'],
         data['total_amount'],
         data['category_name'],
-        parse_bill_date(data['bill_date']).isoformat(),
+        data['category_type'],
+        data['bill_date'],
         data['note'],
         data['merchant_name']
     )
@@ -39,6 +52,39 @@ def add_bill():
         if not connection:
             return jsonify({"error": "Lỗi kết nối database"}), 500
         cursor = connection.cursor()
+        if idem_key:
+            try:
+                cursor.execute("SELECT key FROM idempotency_keys WHERE key = %s;", (idem_key,))
+                exists = cursor.fetchone()
+                if exists:
+                    # Already processed, return a friendly 200
+                    cursor.close()
+                    connection.close()
+                    return jsonify({"message": "Đã ghi nhận hóa đơn trước đó (idempotent)", "idempotency_key": idem_key}), 200
+            except Exception as e:
+                # If table doesn't exist or another error occurred, rollback and try to create table
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
+                try:
+                    cursor = connection.cursor()
+                    cursor.execute(
+                        "CREATE TABLE IF NOT EXISTS idempotency_keys (key TEXT PRIMARY KEY, created_at TIMESTAMP DEFAULT NOW());"
+                    )
+                    connection.commit()
+                except Exception:
+                    try:
+                        connection.rollback()
+                    except Exception:
+                        pass
+                    # continue without idempotency
+                finally:
+                    try:
+                        cursor.close()
+                    except Exception:
+                        pass
+                    cursor = connection.cursor()
         cursor.execute(sql, values)
         new_bill = cursor.fetchone()
 
@@ -49,24 +95,41 @@ def add_bill():
 
         bill_columns = [desc[0] for desc in cursor.description]
         bill_json = dict(zip(bill_columns, new_bill))
-
-        # Compose a human-readable summary so clients (like the Telegram bot)
-        # can display a friendly message without additional parsing.
+        
         try:
             amount = bill_json.get('total_amount')
             merchant = bill_json.get('merchant_name')
-            category = bill_json.get('category_name')
+            category_name = bill_json.get('category_name')
+            category_type = bill_json.get('category_type')
             bdate = bill_json.get('bill_date')
-            transaction_info = f"{category} - {amount} tại {merchant} vào {bdate}"
+            transaction_info = f"{category_name} ({category_type}) - {amount} tại {merchant} vào {bdate}"
         except Exception:
             transaction_info = None
+
+        # record idempotency key after successful creation
+        if idem_key:
+            try:
+                cursor.execute("INSERT INTO idempotency_keys(key) VALUES(%s) ON CONFLICT (key) DO NOTHING;", (idem_key,))
+                connection.commit()
+            except Exception:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
 
         cursor.close()
         # Return the created bill and include the transaction_info field
         resp = {**bill_json}
         if transaction_info:
             resp['transaction_info'] = transaction_info
+        # 201 for new, 200 if idempotent existed (handled above), here is new
         return jsonify(resp), 201
+    except psycopg2.IntegrityError as e:
+        # Handle foreign key violation (e.g., invalid user_id)
+        if getattr(e, 'pgcode', None) == '23503':
+            return jsonify({"error": "Dữ liệu không hợp lệ", "details": "user_id không tồn tại"}), 400
+        logger.exception("Integrity error while adding bill")
+        return jsonify({"error": "Lỗi database", "details": str(e)}), 500
     except psycopg2.Error as e:
         logger.exception("Database error while adding bill")
         return jsonify({"error": "Lỗi database", "details": str(e)}), 500
@@ -94,8 +157,20 @@ def get_bill(bill_id):
     if bill is None:
         return jsonify({"error": "Không tìm thấy hóa đơn"}), 404
     
-    bill_columns = [desc[0] for desc in cursor.description]
-    bill_json = dict(zip(bill_columns, bill))
+    if cursor.description is None:
+        # Fallback column names if description is unexpectedly None
+        bill_json = {
+            "bill_id": bill[0],
+            "bill_date": bill[1],
+            "user_id": bill[2],
+            "merchant_name": bill[3],
+            "category_name": bill[4],
+            "total_amount": bill[5],
+            "note": bill[6],
+        }
+    else:
+        bill_columns = [desc[0] for desc in cursor.description]
+        bill_json = dict(zip(bill_columns, bill))
     
     cursor.close()
     connection.close()
@@ -111,7 +186,7 @@ def update_bill(bill_id):
 
     fields = []
     values = []
-    for key in ['user_id', 'total_amount', 'category_name', 'bill_date', 'note', 'merchant_name']:
+    for key in ['user_id', 'total_amount', 'category_name', 'category_type', 'bill_date', 'note', 'merchant_name']:
         if key in data:
             fields.append(f"{key} = %s")
             if key == 'bill_date':

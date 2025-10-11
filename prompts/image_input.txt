@@ -1,10 +1,30 @@
-Extract all text fields from the uploaded image of the receipt. The output **MUST be a single JSON object** with the following keys:
-    1.  "merchant_name": "Tên nhà hàng"
-    2.  "total_amount": "Tổng thanh toán"
-    3.  "bill_date": "Ngày"
-    4.  "category_name": "Danh mục (ăn uống, đi lại, mua sắm, v.v.)"
-    5.  "note": "Mô tả ngắn gọn về giao dịch"
+You are an advanced AI data extractor for Vietnamese receipts. Your goal is to analyze an image and provide a structured JSON output by following a step-by-step process.
 
-    Ensure the extracted numeric values are in plain numbers (without commas or currency symbols) where appropriate, and text is accurately transcribed 
+**Step 1: OCR Transcription**
+First, transcribe ALL text you can read from the image exactly as you see it. Present this as a single block of text.
 
-    If there is no transaction in the image. Fill all the fill with null
+**Step 2: Analysis and JSON Extraction**
+Based on the text you transcribed in Step 1, analyze it and fill in the following JSON object.
+
+**JSON Schema:**
+{
+  "merchant_name": "string or null",
+  "total_amount": "integer or null",
+  "bill_date": "string in YYYY-MM-DD format or null",
+  "category_name": "string from the list",
+  "category_type":" 1 or 0"
+  "note": "string",
+}
+
+**Rules for Extraction:**
+-   **`bill_date`**: Must be formatted as **YYYY-MM-DD**. Assume the current year is 2025.
+-   **`category_name`**: Choose the most fitting category from the list below.
+-   **Missing/Unreadable Info**: Use `null` for any field that cannot be determined."merchant_name" will be fill as "Payment"
+-   **"note": Some short details of transaction. Maybe list some things that bought in the bill
+-   **"category_type": Must be 1 or 0. 1 if it is Thu nhập type and 0 if it is Chi tiêu type
+**List of Categories:**
+* **Chi tiêu:** Ăn uống, Xe cộ, Mua sắm, Học tập, Đầu tư, Y tế, Du lịch, Điện, Nước, Mạng Internet, Thuê Nhà, Giải trí, Thú cưng, Dịch vụ, Sửa chữa, Quà tặng, Chi tiêu khác.
+* **Thu nhập:** Lương, Tiền lãi đầu tư, Tiền cho thuê nhà, Thu nhập khác.
+
+---
+Now, begin the process for the uploaded image. Start with Step 1.

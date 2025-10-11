@@ -1,28 +1,27 @@
-from .get_promt import get_prompt_path
+from .promt import get_prompt_path, read_promt_file
+import json
+from datetime import date
+from typing import Any, Dict, Union
+from .path_setup import setup_project_root
 
-# Robust config import (support running as package or running from src/)
+# Standardize import of config across run contexts
 try:
     from src import config
 except Exception:
-    try:
-        import config
-    except Exception:
-        import sys
-        from pathlib import Path
-        project_root = Path(__file__).resolve().parents[2]
-        if str(project_root) not in sys.path:
-            sys.path.insert(0, str(project_root))
-        from src import config
+    setup_project_root(__file__)
+    from src import config
 client = config.client
 
-def read_prompt_from_file(filepath):
-    with open(filepath, 'r', encoding='utf-8') as f:
-        return f.read()
-
-def parse_text_for_info(raw_text: str) -> str:
-    prompt = read_prompt_from_file(get_prompt_path("text_input.txt"))
-    contents_given = [prompt, raw_text]
-    response = client.models.generate_content(
-        model="gemini-2.5-flash", contents=contents_given) # type: ignore
-    result_str = response.text[8:-4] # type: ignore
-    return result_str # type: ignore
+def parse_text_for_info(raw_text: str) -> Union[Dict[str, Any], str]:
+    prompt = read_promt_file(get_prompt_path("text_input.txt"))
+    response = client.models.generate_content(model="gemini-2.5-flash", contents=[prompt, raw_text], config={"response_mime_type": "application/json"})
+    result_str = response.text
+    data = json.loads(result_str)  # Convert JSON string to dictionary
+    print(data)
+    if data["total_amount"] is None:
+        return {"raw": "Invalid"}
+    # For testing, set a fixed user_id; in real use get from context/session
+    data["user_id"] = 2
+    if not data["bill_date"]:
+        data["bill_date"] = date.today().isoformat()
+    return data

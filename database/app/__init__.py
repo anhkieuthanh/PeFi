@@ -21,12 +21,10 @@ def create_app():
 
     from api.users import users_bp
     from api.bills import bills_bp
-    from api.categories import categories_bp
 
     # Thêm tiền tố /api/v1 cho tất cả các route trong blueprint
     app.register_blueprint(users_bp, url_prefix='/api/v1')
     app.register_blueprint(bills_bp, url_prefix='/api/v1')
-    app.register_blueprint(categories_bp, url_prefix='/api/v1')
 
     # --- Minimal frontend routes (black & white Notion-like UI) ---
     @app.route('/')
