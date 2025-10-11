@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PeFi — Dashboard</title>
+    <meta name="theme-color" content="#0a84ff" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- inline SVG icons used as masks -->
+    <svg style="display:none">
+      <defs>
+        <g id="icon-coin"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 6a6 6 0 1 1 0 12 6 6 0 0 1 0-12z"/></g>
+        <g id="icon-pay"><path d="M2 7h20v10H2zM4 9v6h16V9z"/></g>
+      </defs>
+    </svg>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">PeFi</div>
+      <nav class="tabs">
+        <button class="tab active" data-tab="dashboard">Dashboard</button>
+        <button class="tab" data-tab="chat">Chat Bot</button>
+      </nav>
+    </header>
+
+    <main class="container">
+      <section id="dashboard" class="panel">
+        <div class="controls">
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <label>Khoảng thời gian:
+              <input id="start" type="date" />
+              —
+              <input id="end" type="date" />
+            </label>
+            <label>Loại:
+              <select id="type">
+                <option value="all">Tất cả</option>
+                <option value="income">Thu</option>
+                <option value="expense">Chi</option>
+              </select>
+            </label>
+            <label>Danh mục:
+              <select id="categories" multiple size="3" style="min-width:160px"></select>
+            </label>
+            <button id="apply">Áp dụng</button>
+          </div>
+        </div>
+
+        <div class="stats">
+          <div class="card small">
+            <div class="label">Thu hàng tháng</div>
+            <div id="income" class="value">—</div>
+          </div>
+          <div class="card small">
+            <div class="label">Chi hàng tháng</div>
+            <div id="expense" class="value">—</div>
+          </div>
+        </div>
+
+        <div class="charts">
+          <div class="card">
+            <canvas id="tsChart"></canvas>
+          </div>
+          <div class="card">
+            <canvas id="catChart"></canvas>
+          </div>
+        </div>
+        
+        <div class="card transactions">
+          <div class="label">Lịch sử giao dịch</div>
+          <table id="txTable" class="tx-table">
+            <thead>
+              <tr>
+                <th>Ngày</th>
+                <th>Merchant</th>
+                <th>Danh mục</th>
+                <th>Số tiền</th>
+                <th>Loại</th>
+              </tr>
+            </thead>
+            <tbody>
+              <!-- populated by JS -->
+            </tbody>
+          </table>
+          <div id="pager" style="display:flex;gap:12px;align-items:center;justify-content:flex-end;margin-top:12px">
+            <button id="prevPage">Trước</button>
+            <span id="pageInfo">Trang 1/1</span>
+            <button id="nextPage">Sau</button>
+          </div>
+        </div>
+
+        <div class="card report-card">
+          <div class="label">Tạo báo cáo phân tích</div>
+          <div class="report-controls">
+            <div class="field">
+              <label>Khoảng thời gian</label>
+              <input id="r_start" type="date" />
+              <input id="r_end" type="date" />
+            </div>
+            <div class="field">
+              <label>Loại giao dịch</label>
+              <select id="r_type">
+                <option value="all">Tất cả</option>
+                <option value="income">Thu</option>
+                <option value="expense">Chi</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Danh mục</label>
+              <select id="r_categories" multiple size="4"></select>
+            </div>
+            <div class="field">
+              <button id="generateReport">Tạo báo cáo</button>
+            </div>
+          </div>
+
+          <div id="reportResult" class="report-result hidden">
+            <div class="report-summary" id="reportSummary"></div>
+            <div class="report-chart card small">
+              <canvas id="reportChart"></canvas>
+            </div>
+            <div class="report-table card" id="reportTableWrap">
+              <div class="label">Kết quả (giao dịch lọc)</div>
+              <table id="reportTable" class="tx-table"><thead><tr><th>Ngày</th><th>Merchant</th><th>Danh mục</th><th>Số tiền</th><th>Loại</th></tr></thead><tbody></tbody></table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="chat" class="panel hidden">
+        <div class="card">
+          <div class="label">Chat Bot (placeholder)</div>
+          <div class="chat-window">Khung chat đang chờ triển khai tính năng...</div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/static/main.js"></script>
+  </body>
+  </html>

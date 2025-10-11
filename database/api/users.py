@@ -1,5 +1,14 @@
 from flask import Blueprint, request, jsonify
-from app.database import connect_to_heroku_db # Import hàm kết nối
+# Robust import of DB connector regardless of CWD
+try:
+    from app.database import connect_to_heroku_db  # Import hàm kết nối
+except Exception:
+    import sys
+    from pathlib import Path
+    db_root = Path(__file__).resolve().parents[1]  # .../database
+    if str(db_root) not in sys.path:
+        sys.path.insert(0, str(db_root))
+    from app.database import connect_to_heroku_db
 import psycopg2
 from psycopg2 import errorcodes
 from .request_utils import parse_json_request
