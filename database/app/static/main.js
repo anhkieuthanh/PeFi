@@ -1,38 +1,33 @@
-document.addEventListener('DOMContentLoaded', ()=>{
+document.addEventListener('DOMContentLoaded', () => {
   const tabs = document.querySelectorAll('.tab');
   const panels = document.querySelectorAll('.panel');
-    // Chart.js global polish for a modern, refined look
-    if (window.Chart) {
-      Chart.defaults.font.family = 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial';
-      Chart.defaults.color = '#6b7280';
-      Chart.defaults.scale.grid.color = 'rgba(17,24,39,0.06)';
-      Chart.defaults.plugins.legend.labels.boxWidth = 12;
-      Chart.defaults.plugins.legend.labels.boxHeight = 12;
-      Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(255,255,255,0.95)';
-      Chart.defaults.plugins.tooltip.borderColor = 'rgba(17,24,39,0.08)';
-      Chart.defaults.plugins.tooltip.borderWidth = 1;
-      Chart.defaults.plugins.tooltip.titleColor = '#111827';
-      Chart.defaults.plugins.tooltip.bodyColor = '#111827';
-    }
-  tabs.forEach(t=>t.addEventListener('click', ()=>{
-    tabs.forEach(x=>x.classList.remove('active'));
+  if (window.Chart) {
+    Chart.defaults.font.family = 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial';
+    Chart.defaults.color = '#6b7280';
+    Chart.defaults.scale.grid.color = 'rgba(17,24,39,0.06)';
+    Chart.defaults.plugins.legend.labels.boxWidth = 12;
+    Chart.defaults.plugins.legend.labels.boxHeight = 12;
+    Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(255,255,255,0.95)';
+    Chart.defaults.plugins.tooltip.borderColor = 'rgba(17,24,39,0.08)';
+    Chart.defaults.plugins.tooltip.borderWidth = 1;
+    Chart.defaults.plugins.tooltip.titleColor = '#111827';
+    Chart.defaults.plugins.tooltip.bodyColor = '#111827';
+  }
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.classList.remove('active'));
     t.classList.add('active');
-    panels.forEach(p=>p.classList.add('hidden'));
+    panels.forEach(p => p.classList.add('hidden'));
     document.getElementById(t.dataset.tab).classList.remove('hidden');
   }));
 
-  // small helpers for chart styling
-  const hexToRgb = (hex)=>{
-    const c = hex.replace('#','');
-    const bigint = parseInt(c,16);
-    if(c.length===6){
-      return {r:(bigint>>16)&255, g:(bigint>>8)&255, b:bigint&255};
-    }
-    return {r:77,g:163,b:255};
+  const hexToRgb = (hex) => {
+    const c = hex.replace('#', '');
+    const bigint = parseInt(c, 16);
+    return c.length === 6 ? { r: (bigint >> 16) & 255, g: (bigint >> 8) & 255, b: bigint & 255 } : { r: 77, g: 163, b: 255 };
   };
-  const makeGradient = (ctx, hex)=>{
-    const {r,g,b} = hexToRgb(hex);
-    const grad = ctx.createLinearGradient(0,0,0,200);
+  const makeGradient = (ctx, hex) => {
+    const { r, g, b } = hexToRgb(hex);
+    const grad = ctx.createLinearGradient(0, 0, 0, ctx.canvas.clientHeight);
     grad.addColorStop(0, `rgba(${r},${g},${b},0.25)`);
     grad.addColorStop(1, `rgba(${r},${g},${b},0.02)`);
     return grad;
@@ -40,159 +35,188 @@ document.addEventListener('DOMContentLoaded', ()=>{
 
   let currentPage = 1;
   let totalPages = 1;
-  const PAGE_SIZE = 10;
 
-  function getFilters(){
-    const start = document.getElementById('start').value;
-    const end = document.getElementById('end').value;
-    const type = document.getElementById('type').value;
-    const cats = Array.from(document.getElementById('categories').selectedOptions).map(o=>o.value);
+  // Chart instances
+  let tsChartInstance = null;
+  let categoryTsChartInstance = null; 
+
+  // Ensure loading overlay exists
+  function ensureLoadingOverlay(){
+    let el = document.getElementById('loadingOverlay');
+    if(!el){
+      el = document.createElement('div');
+      el.id = 'loadingOverlay';
+      el.className = 'loading-overlay hidden';
+      el.innerHTML = '<div class="spinner"></div>';
+      document.body.appendChild(el);
+    }
+    return el;
+  }
+
+  function getFilters() {
+    const activeButton = document.querySelector('.timeframe-btn.active');
+    const timeframe = activeButton ? activeButton.dataset.frame : '1M';
+
     const params = new URLSearchParams();
-    if(start) params.set('start', start);
-    if(end) params.set('end', end);
-    if(type && type !== 'all') params.set('type', type);
-    if(cats.length) params.set('categories', cats.join(','));
+    params.set('timeframe', timeframe);
     params.set('page', String(currentPage));
-    params.set('page_size', String(PAGE_SIZE));
+    // Giả định user_id là 2. Trong ứng dụng thực tế, giá trị này sẽ được lấy sau khi đăng nhập.
+    params.set('user_id', '2'); 
     return params;
   }
 
-  function renderPager(pagination){
+  function renderPager(pagination) {
     const info = document.getElementById('pageInfo');
     const btnPrev = document.getElementById('prevPage');
     const btnNext = document.getElementById('nextPage');
     currentPage = pagination?.page || 1;
     totalPages = pagination?.total_pages || 1;
-    info.textContent = `Trang ${currentPage}/${totalPages}`;
-    btnPrev.disabled = currentPage <= 1;
-    btnNext.disabled = currentPage >= totalPages;
+    if(info) info.textContent = `Trang ${currentPage}/${totalPages}`;
+    if(btnPrev) btnPrev.disabled = currentPage <= 1;
+    if(btnNext) btnNext.disabled = currentPage >= totalPages;
   }
 
-  // fetch and render dashboard data
-  async function loadData(){
-    try{
-      const resp = await fetch(`/dashboard_data?${getFilters().toString()}`);
-      const data = await resp.json();
-      document.getElementById('income').innerText = new Intl.NumberFormat('vi-VN').format(data.monthly.income);
-      document.getElementById('expense').innerText = new Intl.NumberFormat('vi-VN').format(data.monthly.expense);
+  async function loadData() {
+    const loadingOverlay = ensureLoadingOverlay();
+    loadingOverlay.classList.remove('hidden');
 
-      // timeseries chart with refined palette and smooth fills
-  const colors = ['#0a84ff','#ef4444','#f59e0b','#10b981'];
+    try {
+      // Endpoint là /dashboard_data, port giữ nguyên 5001 theo file run.py
+      const apiUrl = `http://127.0.0.1:5001/dashboard_data?${getFilters().toString()}`;
+      const resp = await fetch(apiUrl);
+      if (!resp.ok) throw new Error(`Lỗi HTTP: ${resp.status}`);
+      const data = await resp.json();
+
+  const incomeEl = document.getElementById('income');
+  const expenseEl = document.getElementById('expense');
+  if (incomeEl) incomeEl.innerText = new Intl.NumberFormat('vi-VN').format(data.monthly.income);
+  if (expenseEl) expenseEl.innerText = new Intl.NumberFormat('vi-VN').format(data.monthly.expense);
+
+      const colors = ['#0a84ff', '#ef4444', '#f59e0b', '#10b981', '#7c3aed', '#f472b6'];
+
+      // Biểu đồ Timeseries chính
       const tsCtx = document.getElementById('tsChart').getContext('2d');
-      new Chart(tsCtx, {
-        type:'line',
-        data:{labels:data.timeseries.labels, datasets:[
-          {label:'Thu',data:data.timeseries.income,borderColor:colors[0],backgroundColor:makeGradient(tsCtx, colors[0]),fill:true,tension:0.35,borderWidth:2.4,pointRadius:0,pointHitRadius:10},
-          {label:'Chi',data:data.timeseries.expense,borderColor:colors[1],backgroundColor:makeGradient(tsCtx, colors[1]),fill:true,tension:0.35,borderWidth:2.4,pointRadius:0,pointHitRadius:10}
-        ]},
-        options:{
-          plugins:{legend:{display:true}},
-          scales:{y:{beginAtZero:true}}
+      if (tsChartInstance) tsChartInstance.destroy();
+      tsChartInstance = new Chart(tsCtx, {
+        type: 'line',
+        data: {
+          labels: data.timeseries.labels,
+          datasets: [
+            { label: 'Thu', data: data.timeseries.income, borderColor: colors[0], backgroundColor: makeGradient(tsCtx, colors[0]), fill: true, tension: 0.35, borderWidth: 2.4, pointRadius: 0, pointHitRadius: 10 },
+            { label: 'Chi', data: data.timeseries.expense, borderColor: colors[1], backgroundColor: makeGradient(tsCtx, colors[1]), fill: true, tension: 0.35, borderWidth: 2.4, pointRadius: 0, pointHitRadius: 10 }
+          ]
+        },
+        options: { plugins: { legend: { display: true } }, scales: { y: { beginAtZero: true } } }
+      });
+
+      // Biểu đồ Timeseries theo Danh mục
+    const categoryChartContainer = document.getElementById('categoryTsChartContainer');
+    if (categoryChartContainer && data.category_timeseries && data.category_timeseries.datasets && data.category_timeseries.datasets.length > 0) {
+    categoryChartContainer.classList.remove('hidden');
+    const catCanvas = document.getElementById('categoryTsChart');
+    if (catCanvas && catCanvas.getContext) {
+      const catTsCtx = catCanvas.getContext('2d');
+      if (categoryTsChartInstance) categoryTsChartInstance.destroy();
+
+      const categoryDatasets = data.category_timeseries.datasets.map((ds, index) => ({
+        ...ds,
+        borderColor: colors[(index + 2) % colors.length],
+        originalBorderColor: colors[(index + 2) % colors.length],
+        backgroundColor: makeGradient(catTsCtx, colors[(index + 2) % colors.length]),
+        fill: true, tension: 0.35, borderWidth: 2, pointRadius: 0, pointHitRadius: 10
+      }));
+
+      categoryTsChartInstance = new Chart(catTsCtx, {
+        type: 'line',
+        data: { labels: data.category_timeseries.labels, datasets: categoryDatasets },
+        options: {
+          scales: { y: { beginAtZero: true } },
+          plugins: { legend: { position: 'bottom' } },
+          interaction: { mode: 'nearest', intersect: false },
+          onHover: (event, activeElements, chart) => {
+            // Find the nearest element to reflect actual hovered dataset
+            const nearest = chart.getElementsAtEventForMode(event, 'nearest', { intersect: false }, true);
+            const hoveredDatasetIndex = nearest && nearest.length ? nearest[0].datasetIndex : undefined;
+            if (hoveredDatasetIndex !== undefined) {
+              chart.data.datasets.forEach((dataset, i) => {
+                dataset.borderColor = i === hoveredDatasetIndex ? dataset.originalBorderColor : 'rgba(107, 114, 128, 0.2)';
+              });
+            } else {
+              chart.data.datasets.forEach(dataset => {
+                dataset.borderColor = dataset.originalBorderColor;
+              });
+            }
+            chart.update('none');
+          },
+          onLeave: (event, chart) => {
+            // Restore all series when pointer leaves the chart area
+            chart.data.datasets.forEach(dataset => {
+              dataset.borderColor = dataset.originalBorderColor;
+            });
+            chart.update('none');
+          }
         }
       });
 
-      // category chart
-      const catCtx = document.getElementById('catChart').getContext('2d');
-      new Chart(catCtx, {
-        type:'doughnut',
-        data:{
-          labels:data.by_category.map(x=>x.category),
-          datasets:[{data:data.by_category.map(x=>x.amount),backgroundColor:colors,borderWidth:0}]
-        },
-        options:{plugins:{legend:{position:'bottom'}}, cutout:'62%'}
-      });
+      // Fallback: reset colors when mouse leaves the canvas
+      // Using property assignment avoids accumulating multiple listeners across re-renders
+      catCanvas.onmouseleave = () => {
+        if (categoryTsChartInstance) {
+          categoryTsChartInstance.data.datasets.forEach(ds => {
+            ds.borderColor = ds.originalBorderColor;
+          });
+          categoryTsChartInstance.update('none');
+        }
+      };
+    }
+      } else {
+    if (categoryChartContainer) categoryChartContainer.classList.add('hidden');
+      }
 
-      // populate transactions table
+      // Populate bảng giao dịch
       const tbody = document.querySelector('#txTable tbody');
       tbody.innerHTML = '';
-      // SVG icon strings
-      const coinSVG = `<svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" fill="var(--accent)"/><circle cx="12" cy="12" r="6" fill="#fff" opacity="0.9"/></svg>`;
-      const paySVG = `<svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><rect x="2" y="6" width="20" height="12" rx="2" fill="#000" opacity="0.9"/><rect x="4" y="9" width="16" height="6" fill="#fff" opacity="0.95"/></svg>`;
-  (data.transactions || []).forEach(tx=>{
+      (data.transactions || []).forEach(tx => {
+        // Normalize type coming from backend: could be 'income'/'expense', 1/0, or boolean
+        const isIncome = tx.type === 'income' || tx.type === 1 || tx.type === '1' || tx.type === true;
+        const typeStr = isIncome ? 'income' : 'expense';
         const tr = document.createElement('tr');
-        const iconHTML = tx.type === 'income' ? coinSVG : paySVG;
+        const iconId = isIncome ? 'icon-coin' : 'icon-pay';
+        const iconHTML = `<svg class="icon"><use xlink:href="#${iconId}"></use></svg>`;
         tr.innerHTML = `
           <td>${tx.date}</td>
           <td class="merchant-cell">${iconHTML}<span>${tx.merchant}</span></td>
           <td>${tx.category}</td>
-          <td class="tx-amount ${tx.type}">${new Intl.NumberFormat('vi-VN').format(tx.amount)}</td>
-          <td>${tx.type}</td>
+          <td class="tx-amount ${typeStr}">${new Intl.NumberFormat('vi-VN').format(tx.amount)}</td>
+          <td>${typeStr}</td>
         `;
         tbody.appendChild(tr);
       });
 
-      // populate categories multi-select for report controls
-      const catSelect = document.getElementById('r_categories');
-      catSelect.innerHTML = '';
-      data.by_category.forEach(c=>{
-        const opt = document.createElement('option'); opt.value=c.category; opt.innerText=c.category; catSelect.appendChild(opt);
-      });
-
-      // also populate top filter categories (keep existing selections when possible)
-      const topCat = document.getElementById('categories');
-      const selectedVals = new Set(Array.from(topCat.selectedOptions).map(o=>o.value));
-      topCat.innerHTML = '';
-      data.by_category.forEach(c=>{
-        const opt = document.createElement('option'); opt.value=c.category; opt.innerText=c.category; if(selectedVals.has(c.category)) opt.selected = true; topCat.appendChild(opt);
-      });
-
-      // render pager
       renderPager(data.pagination);
 
-      // report generation handler
-      document.getElementById('generateReport').addEventListener('click', ()=>{
-        const rs = document.getElementById('r_start').value;
-        const re = document.getElementById('r_end').value;
-        const rtype = document.getElementById('r_type').value;
-        const selected = Array.from(catSelect.selectedOptions).map(o=>o.value);
-
-        const filtered = (data.transactions || []).filter(tx=>{
-          if(rtype !== 'all' && tx.type !== rtype) return false;
-          if(selected.length && !selected.includes(tx.category)) return false;
-          if(rs && tx.date < rs) return false;
-          if(re && tx.date > re) return false;
-          return true;
-        });
-
-        // summary
-        const total = filtered.reduce((s,v)=>s + v.amount*((v.type==='income')?1:-1),0);
-        document.getElementById('reportSummary').innerText = `Tổng (thu-chi): ${new Intl.NumberFormat('vi-VN').format(total)}`;
-        document.getElementById('reportResult').classList.remove('hidden');
-
-        // report table
-        const rtbody = document.querySelector('#reportTable tbody'); rtbody.innerHTML='';
-        filtered.forEach(tx=>{
-          const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${tx.date}</td><td>${tx.merchant}</td><td>${tx.category}</td><td>${new Intl.NumberFormat('vi-VN').format(tx.amount)}</td><td>${tx.type}</td>`;
-          rtbody.appendChild(tr);
-        });
-
-        // report chart: group by category amounts
-        const byCat = {};
-        filtered.forEach(tx=>{ byCat[tx.category] = (byCat[tx.category]||0) + tx.amount; });
-        const labels = Object.keys(byCat);
-        const values = labels.map(l=>byCat[l]);
-        const rctx = document.getElementById('reportChart').getContext('2d');
-        if(window.reportChart) window.reportChart.destroy();
-        window.reportChart = new Chart(rctx, {type:'bar', data:{labels, datasets:[{label:'Total',data:values,backgroundColor:colors,borderRadius:6,maxBarThickness:36}]}, options:{plugins:{legend:{display:false}}}});
-      });
-
-    }catch(e){
-      console.error('Could not load dashboard data', e);
+    } catch (e) {
+      console.error('Không thể tải dữ liệu dashboard:', e);
+    } finally {
+      loadingOverlay.classList.add('hidden');
     }
   }
 
+  // --- EVENT LISTENERS ---
+  document.querySelectorAll('.timeframe-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const active = document.querySelector('.timeframe-btn.active');
+      if (active) active.classList.remove('active');
+      btn.classList.add('active');
+      currentPage = 1;
+      loadData();
+    });
+  });
+
+  const prevBtn = document.getElementById('prevPage');
+  if (prevBtn) prevBtn.addEventListener('click', () => { if (currentPage > 1) { currentPage -= 1; loadData(); } });
+  const nextBtn = document.getElementById('nextPage');
+  if (nextBtn) nextBtn.addEventListener('click', () => { if (currentPage < totalPages) { currentPage += 1; loadData(); } });
+
   loadData();
-
-  document.getElementById('apply').addEventListener('click', ()=>{
-    currentPage = 1;
-    loadData();
-  });
-
-  document.getElementById('prevPage').addEventListener('click', ()=>{
-    if(currentPage > 1){ currentPage -= 1; loadData(); }
-  });
-  document.getElementById('nextPage').addEventListener('click', ()=>{
-    if(currentPage < totalPages){ currentPage += 1; loadData(); }
-  });
 });

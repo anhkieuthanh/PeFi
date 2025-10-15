@@ -1,225 +1,298 @@
-from flask import Flask, render_template, jsonify
+# __init__.py
+
+from flask import Flask, render_template, jsonify, request
 from pathlib import Path
-try:
-    from src import config as app_config
-except Exception:
-    # Add project root to sys.path and retry
-    import sys
-    from pathlib import Path
-    project_root = Path(__file__).resolve().parents[2]
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-    from src import config as app_config
+from flask_cors import CORS
+import datetime
+import psycopg2
+from collections import defaultdict
+import math
+import calendar
+
+# --- Phần setup và import giữ nguyên ---
 
 def create_app():
-    # ensure Flask knows where our templates live (templates/ is under database/)
+    # Ensure Flask can find templates at database/templates (sibling of app/)
     templates_dir = str(Path(__file__).resolve().parents[1] / 'templates')
     app = Flask(__name__, template_folder=templates_dir)
+    CORS(app) # Cho phép CORS để frontend có thể gọi
 
-    # Validate configuration on startup
-    app_config.validate_config()
-
+    # Đăng ký các blueprint API (nếu bạn vẫn muốn dùng CRUD riêng)
     from api.users import users_bp
     from api.bills import bills_bp
-
-    # Thêm tiền tố /api/v1 cho tất cả các route trong blueprint
     app.register_blueprint(users_bp, url_prefix='/api/v1')
     app.register_blueprint(bills_bp, url_prefix='/api/v1')
 
-    # --- Minimal frontend routes (black & white Notion-like UI) ---
     @app.route('/')
     def index():
+        # Serve the dashboard page
         return render_template('index.html')
 
     @app.route('/dashboard_data')
     def dashboard_data():
-        """Return aggregated dashboard data.
-
-        Query params supported:
-        - start: YYYY-MM-DD (inclusive)
-        - end: YYYY-MM-DD (inclusive)
-        - type: income|expense|all
-        - categories: comma-separated category names
         """
-        from flask import request
-        import datetime
-        import psycopg2
-        from typing import Any
-        # Log request headers to help debug 403/requests
-        try:
-            app.logger.debug('dashboard_data request args: %s', request.args)
-            app.logger.debug('dashboard_data headers: %s', dict(request.headers))
-        except Exception:
-            pass
+        Endpoint tổng hợp dữ liệu, được điều chỉnh để hoạt động với timeframe.
+        """
+        # --- THAY ĐỔI 1: Lấy timeframe và user_id từ request ---
+        timeframe = request.args.get('timeframe', '1M') # Mặc định là 1 tháng
+        user_id = request.args.get('user_id')
+        page = int(request.args.get('page', '1'))
+        page_size = int(request.args.get('page_size', '10'))
 
-        # parse params
-        start = request.args.get('start')
-        end = request.args.get('end')
-        ttype = request.args.get('type', 'all')
-        categories = request.args.get('categories')
-        cats = [c.strip() for c in categories.split(',')] if categories else []
-        # pagination
-        try:
-            page = max(1, int(request.args.get('page', '1')))
-        except Exception:
-            page = 1
-        try:
-            page_size = int(request.args.get('page_size', '10'))
-        except Exception:
-            page_size = 10
-        page_size = max(1, min(100, page_size))
-        offset = (page - 1) * page_size
+        if not user_id:
+            return jsonify({"error": "Thiếu user_id"}), 400
 
-        # default range: last 30 days
-        if not end:
-            end_date = datetime.date.today()
+        # --- THAY ĐỔI 2: Tính toán ngày bắt đầu/kết thúc từ timeframe ---
+        end_date = datetime.date.today()
+        start_date = end_date
+        tf_upper = str(timeframe).upper()
+        if tf_upper == 'ALL':
+            # Cover all historical data
+            start_date = datetime.date(1970, 1, 1)
+            unit = 'A'
+            value = 0
         else:
-            end_date = datetime.date.fromisoformat(end)
-        if not start:
-            start_date = end_date - datetime.timedelta(days=29)
-        else:
-            start_date = datetime.date.fromisoformat(start)
+            unit = timeframe[-1].upper()
+            value = int(timeframe[:-1])
 
-        # Try to query the DB; if unavailable, return sample fallback
+        def _sub_months(d: datetime.date, months: int) -> datetime.date:
+            total = d.year * 12 + (d.month - 1) - months
+            y = total // 12
+            m = total % 12 + 1
+            last_day = calendar.monthrange(y, m)[1]
+            day = min(d.day, last_day)
+            return datetime.date(y, m, day)
+
+        if unit == 'W':
+            start_date = end_date - datetime.timedelta(days=value * 7)
+        elif unit == 'M':
+            start_date = _sub_months(end_date, value)
+        elif unit == 'Y':
+            try:
+                start_date = end_date.replace(year=end_date.year - value)
+            except ValueError:
+                # Handle Feb 29 on non-leap year
+                start_date = end_date.replace(month=2, day=28, year=end_date.year - value)
+
         try:
             from app.database import connect_to_heroku_db
             conn = connect_to_heroku_db()
             if not conn:
-                raise RuntimeError('No DB')
+                raise RuntimeError('Không thể kết nối DB')
 
-            cur = conn.cursor()
+            cursor = conn.cursor()
 
-            # by_category
-            if cats:
-                sql_by_cat = (
-                    "SELECT category_name, SUM(total_amount) as amount "
-                    "FROM bills WHERE bill_date::date BETWEEN %s AND %s AND category_name = ANY(%s) "
-                    "GROUP BY category_name ORDER BY amount DESC LIMIT 20;"
+            # Query tất cả giao dịch, lấy category_type từ bảng categories nếu có
+            sql_all_tx = """
+                SELECT 
+                    b.bill_date::date AS bill_date,
+                    b.total_amount::float AS total_amount,
+                    COALESCE(c.category_type,
+                        CASE WHEN lower(b.category_name) LIKE '%thu%'
+                               OR lower(b.category_name) LIKE '%income%'
+                               OR lower(b.category_name) LIKE '%salary%'
+                             THEN 'income' ELSE 'expense' END
+                    ) AS category_type,
+                    b.category_name,
+                    b.merchant_name
+                FROM bills b
+                LEFT JOIN categories c
+                  ON c.user_id = b.user_id AND c.category_name = b.category_name
+                WHERE b.user_id = %s AND b.bill_date BETWEEN %s AND %s
+                ORDER BY b.bill_date DESC;
+            """
+            try:
+                cursor.execute(sql_all_tx, (user_id, start_date, end_date))
+            except Exception:
+                # Fallback if categories table is missing; select from bills only
+                cursor.execute(
+                    """
+                    SELECT b.bill_date::date,
+                           b.total_amount::float,
+                           b.category_type,
+                           b.category_name,
+                           b.merchant_name
+                    FROM bills b
+                    WHERE b.user_id = %s AND b.bill_date BETWEEN %s AND %s
+                    ORDER BY b.bill_date DESC;
+                    """,
+                    (user_id, start_date, end_date),
                 )
-                params_by_cat = (start_date, end_date, cats)
+                rows = cursor.fetchall()
+                transactions_as_dict = []
+                for r in rows:
+                    cat_type = r[2]
+                    cat = r[3]
+                    # normalize type from fallback (could be '1'/'0', 1/0, income/expense)
+                    def _norm(v):
+                        if v in (1, '1', True): return 'income'
+                        if v in (0, '0', False): return 'expense'
+                        s = (str(v).strip().lower() if v is not None else '')
+                        if s in ('income','thu','thu nhập','thu nhap','in'): return 'income'
+                        if s in ('expense','chi','chi tiêu','chi tieu','out'): return 'expense'
+                        return 'expense'
+                    norm_type = _norm(cat_type)
+                    transactions_as_dict.append({
+                        'bill_date': r[0],
+                        'total_amount': float(r[1]),
+                        'category_type': norm_type,
+                        'category_name': cat,
+                        'merchant_name': r[4],
+                    })
             else:
-                sql_by_cat = (
-                    "SELECT category_name, SUM(total_amount) as amount "
-                    "FROM bills WHERE bill_date::date BETWEEN %s AND %s "
-                    "GROUP BY category_name ORDER BY amount DESC LIMIT 20;"
-                )
-                params_by_cat = (start_date, end_date)
-            cur.execute(sql_by_cat, params_by_cat)
-            by_cat_rows = cur.fetchall()
-            by_category = [{'category': r[0], 'amount': float(r[1])} for r in by_cat_rows]
-
-            # timeseries
-            sql_ts = (
-                "SELECT bill_date::date as day, "
-                "SUM(CASE WHEN lower(category_name) LIKE %s OR lower(category_name) LIKE %s OR lower(category_name) LIKE %s THEN total_amount ELSE 0 END) AS income, "
-                "SUM(CASE WHEN NOT (lower(category_name) LIKE %s OR lower(category_name) LIKE %s OR lower(category_name) LIKE %s) THEN total_amount ELSE 0 END) AS expense "
-                "FROM bills WHERE bill_date::date BETWEEN %s AND %s "
-                "GROUP BY day ORDER BY day;"
-            )
-            kw = ('%thu%', '%income%', '%salary%')
-            params_ts = (kw[0], kw[1], kw[2], kw[0], kw[1], kw[2], start_date, end_date)
-            cur.execute(sql_ts, params_ts)
-            ts_rows = cur.fetchall()
-            labels = [r[0].isoformat() for r in ts_rows]
-            incomes = [float(r[1]) for r in ts_rows]
-            expenses = [float(r[2]) for r in ts_rows]
-
-            # transactions list with total count and pagination
-            base_where = ["bill_date::date BETWEEN %s AND %s"]
-            base_params: list[Any] = [start_date, end_date]
-            if ttype in ('income','expense'):
-                kw_parts = "(lower(category_name) LIKE %s OR lower(category_name) LIKE %s OR lower(category_name) LIKE %s)"
-                if ttype == 'income':
-                    base_where.append(kw_parts)
+                rows = cursor.fetchall()
+                if cursor.description is None:
+                    # Unexpected, but guard anyway
+                    transactions_as_dict = [
+                        {
+                            'bill_date': r[0],
+                            'total_amount': float(r[1]),
+                            'category_type': r[2],
+                            'category_name': r[3],
+                            'merchant_name': r[4],
+                        } for r in rows
+                    ]
                 else:
-                    base_where.append("NOT " + kw_parts)
-                base_params += ['%thu%', '%income%', '%salary%']
-            if cats:
-                base_where.append("category_name = ANY(%s)")
-                base_params.append(tuple(cats))
+                    cols = [desc[0] for desc in cursor.description]
+                    transactions_as_dict = [dict(zip(cols, row)) for row in rows]
 
-            where_sql = " WHERE " + " AND ".join(base_where) if base_where else ""
+            # Chuẩn hóa category_type: DB có thể trả về 1/0, True/False hoặc 'income'/'expense'
+            def _normalize_type(v):
+                if v in (1, '1', True):
+                    return 'income'
+                if v in (0, '0', False):
+                    return 'expense'
+                s = (str(v).strip().lower() if v is not None else '')
+                if s in ('income', 'thu', 'thu nhập', 'thu nhap', 'in'):
+                    return 'income'
+                if s in ('expense', 'chi', 'chi tiêu', 'chi tieu', 'out'):
+                    return 'expense'
+                # Mặc định coi là expense nếu không xác định rõ
+                return 'expense'
 
-            # total count for pagination
-            sql_count = f"SELECT COUNT(*) FROM bills{where_sql};"
-            cur.execute(sql_count, tuple(base_params))
-            row = cur.fetchone() or (0,)
-            total_count = int(row[0])
+            for tx in transactions_as_dict:
+                tx['category_type'] = _normalize_type(tx.get('category_type'))
 
-            sql_tx = (
-                "SELECT bill_id, bill_date::date, merchant_name, category_name, total_amount::float FROM bills"
-                f"{where_sql} ORDER BY bill_date DESC, bill_id DESC LIMIT %s OFFSET %s;"
-            )
-            params_tx = tuple(base_params + [page_size, offset])
-            cur.execute(sql_tx, params_tx)
-            tx_rows = cur.fetchall()
-            transactions = []
-            for r in tx_rows:
-                cat = r[3]
-                ttype_row = 'income' if any(k in (cat or '').lower() for k in ['thu','income','salary']) else 'expense'
-                transactions.append({
-                    'id': r[0],
-                    'date': r[1].isoformat(),
-                    'merchant': r[2],
-                    'category': cat,
-                    'amount': float(r[4]),
-                    'type': ttype_row
-                })
+            # --- Bắt đầu tính toán, tổng hợp dữ liệu ---
 
-            # monthly totals
-            total_income = sum(incomes)
-            total_expense = sum(expenses)
+            # 1. Tổng thu/chi trong kỳ
+            total_income = sum(tx['total_amount'] for tx in transactions_as_dict if tx['category_type'] == 'income')
+            total_expense = sum(tx['total_amount'] for tx in transactions_as_dict if tx['category_type'] == 'expense')
 
+            # 2. Dữ liệu Timeseries tổng hợp (tsChart)
+            delta = end_date - start_date
+            all_days = [(start_date + datetime.timedelta(days=i)) for i in range(delta.days + 1)]
+            all_days_str = [d.strftime("%Y-%m-%d") for d in all_days]
+
+            daily_totals = defaultdict(lambda: {'income': 0.0, 'expense': 0.0})
+            for tx in transactions_as_dict:
+                tx_date_str = tx['bill_date'].strftime("%Y-%m-%d")
+                daily_totals[tx_date_str][tx['category_type']] += float(tx['total_amount'])
+
+            timeseries_income = [daily_totals[day]['income'] for day in all_days_str]
+            timeseries_expense = [daily_totals[day]['expense'] for day in all_days_str]
+            
+            # --- THAY ĐỔI 3: Thêm logic để tạo 'category_timeseries' ---
+            expense_tx = [tx for tx in transactions_as_dict if tx['category_type'] == 'expense']
+            expense_categories = sorted(list({tx['category_name'] for tx in expense_tx}))
+            
+            category_daily_expense = {cat: defaultdict(float) for cat in expense_categories}
+            for tx in expense_tx:
+                tx_date_str = tx['bill_date'].strftime("%Y-%m-%d")
+                category_daily_expense[tx['category_name']][tx_date_str] += float(tx['total_amount'])
+                
+            category_datasets = []
+            for category in expense_categories:
+                data_points = [category_daily_expense[category][day] for day in all_days_str]
+                category_datasets.append({"label": category, "data": data_points})
+
+            # 4. Tổng hợp theo danh mục (by_category)
+            by_category_totals = defaultdict(float)
+            for tx in expense_tx:
+                by_category_totals[tx['category_name']] += float(tx['total_amount'])
+            by_category = [{"category": name, "amount": amount} for name, amount in by_category_totals.items()]
+
+            # 5. Dữ liệu bảng giao dịch (phân trang)
+            total_items = len(transactions_as_dict)
+            total_pages = math.ceil(total_items / page_size)
+            start_index = (page - 1) * page_size
+            end_index = start_index + page_size
+            paginated_tx = transactions_as_dict[start_index:end_index]
+            
+            transactions_for_fe = [
+                {
+                    "date": tx['bill_date'].strftime("%Y-%m-%d"),
+                    "merchant": tx['merchant_name'],
+                    "category": tx['category_name'],
+                    "amount": float(tx['total_amount']),
+                    "type": tx['category_type']
+                } for tx in paginated_tx
+            ]
+            
+            cursor.close()
             conn.close()
 
+            # --- THAY ĐỔI 4: Thêm 'category_timeseries' vào JSON trả về ---
             return jsonify({
                 'monthly': {'income': total_income, 'expense': total_expense},
+                'timeseries': {'labels': all_days_str, 'income': timeseries_income, 'expense': timeseries_expense},
+                'category_timeseries': {'labels': all_days_str, 'datasets': category_datasets}, # ĐÃ THÊM
                 'by_category': by_category,
-                'timeseries': {'labels': labels, 'income': incomes, 'expense': expenses},
-                'transactions': transactions,
+                'transactions': transactions_for_fe,
                 'pagination': {
                     'page': page,
                     'page_size': page_size,
-                    'total_count': total_count,
-                    'total_pages': (total_count + page_size - 1) // page_size
+                    'total_items': total_items,
+                    'total_pages': total_pages
+                }
+            })
+        except Exception as e:
+            # Fallback/sample data when DB not available or any error occurs
+            app.logger.exception('Lỗi dashboard_data, trả về dữ liệu mẫu (fallback)')
+            # build sample labels according to timeframe window
+            delta = end_date - start_date
+            all_days = [(start_date + datetime.timedelta(days=i)) for i in range(max(0, delta.days) + 1)]
+            all_days_str = [d.strftime('%Y-%m-%d') for d in all_days]
+            # simple saw pattern for demo
+            income_series = [(i % 5) * 100000 for i in range(len(all_days_str))]
+            expense_series = [((i+2) % 5) * 80000 for i in range(len(all_days_str))]
+            total_income = sum(income_series)
+            total_expense = sum(expense_series)
+            by_category = [
+                {"category": "Ăn uống", "amount": 350000},
+                {"category": "Di chuyển", "amount": 240000},
+                {"category": "Giải trí", "amount": 180000},
+            ]
+            # few sample transactions
+            transactions_for_fe = []
+            for i in range(min(10, len(all_days_str))):
+                transactions_for_fe.append({
+                    "date": all_days_str[-(i+1)] if all_days_str else datetime.date.today().strftime('%Y-%m-%d'),
+                    "merchant": ["Cafe", "Grab", "Cinema"][i % 3],
+                    "category": ["Ăn uống", "Di chuyển", "Giải trí"][i % 3],
+                    "amount": float([102000, 300000, 200000][i % 3]),
+                    "type": "expense"
+                })
+            category_datasets = []
+            for cat in ["Ăn uống", "Di chuyển", "Giải trí"]:
+                category_datasets.append({
+                    "label": cat,
+                    "data": [v if (j % 3) == (0 if cat=="Ăn uống" else 1 if cat=="Di chuyển" else 2) else 0 for j, v in enumerate(expense_series)]
+                })
+            total_items = len(transactions_for_fe)
+            total_pages = 1
+            return jsonify({
+                'monthly': {'income': total_income, 'expense': total_expense},
+                'timeseries': {'labels': all_days_str, 'income': income_series, 'expense': expense_series},
+                'category_timeseries': {'labels': all_days_str, 'datasets': category_datasets},
+                'by_category': by_category,
+                'transactions': transactions_for_fe,
+                'pagination': {
+                    'page': 1,
+                    'page_size': 10,
+                    'total_items': total_items,
+                    'total_pages': total_pages
                 }
             })
 
-        except Exception as e:
-            # fallback/sample data when DB not available or error occurs
-            app.logger.exception('dashboard_data: error querying DB, returning sample')
-            sample = {
-                "monthly": {"income": 2500000, "expense": 1850000},
-                "by_category": [
-                    {"category": "Ăn uống", "amount": 650000},
-                    {"category": "Di chuyển", "amount": 300000},
-                    {"category": "Giải trí", "amount": 200000},
-                    {"category": "Mua sắm", "amount": 300000}
-                ],
-                "timeseries": {"labels": ["01","05","10","15","20","25","30"], "income": [200000,300000,250000,400000,300000,450000,450000], "expense": [150000,200000,180000,250000,200000,300000,520000]},
-                "transactions": [
-                    {"date":"2025-10-05","merchant":"LAC COFFEE","category":"Ăn uống","amount":102000,"type":"expense"},
-                    {"date":"2025-10-04","merchant":"Salary","category":"Thu nhập","amount":2500000,"type":"income"},
-                    {"date":"2025-10-03","merchant":"Grab","category":"Di chuyển","amount":300000,"type":"expense"},
-                    {"date":"2025-10-02","merchant":"Cinema","category":"Giải trí","amount":200000,"type":"expense"}
-                ]
-            }
-            # provide minimal pagination metadata for sample
-            sample['pagination'] = {
-                'page': 1,
-                'page_size': len(sample.get('transactions', [])),
-                'total_count': len(sample.get('transactions', [])),
-                'total_pages': 1
-            }
-            return jsonify(sample)
-
-    @app.route('/debug_headers', methods=['GET','POST'])
-    def debug_headers():
-        from flask import request
-        hdrs = {k:v for k,v in request.headers.items()}
-        return jsonify({'method': request.method, 'headers': hdrs, 'args': request.args}), 200
-
-    @app.route('/ping')
-    def ping():
-        return 'ok', 200
     return app

@@ -1,4 +1,6 @@
 import os
+import sys
+from pathlib import Path
 import psycopg2
 from psycopg2 import OperationalError
 from dotenv import load_dotenv
@@ -10,9 +12,14 @@ def connect_to_heroku_db():
     conn = None
     try:
         # Try yaml-configured value first, then environment
+        database_url = None
         try:
-            from src import config as app_config
-            database_url = app_config.DATABASE_URL or os.environ.get('DATABASE_URL')
+            # Ensure repo root on sys.path so `from src import config` works when CWD is database/
+            repo_root = Path(__file__).resolve().parents[2]
+            if str(repo_root) not in sys.path:
+                sys.path.insert(0, str(repo_root))
+            from src import config as app_config  # type: ignore
+            database_url = getattr(app_config, 'DATABASE_URL', None) or os.environ.get('DATABASE_URL')
         except Exception:
             database_url = os.environ.get('DATABASE_URL')
         if not database_url:
