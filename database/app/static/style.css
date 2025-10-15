@@ -74,9 +74,22 @@ body{
 .tx-amount.income{color:var(--accent-3)}
 .tx-amount.expense{color:#ef4444}
 
-.icon{width:18px;height:18px;display:inline-block;margin-right:8px;vertical-align:middle;filter: drop-shadow(0 2px 4px rgba(17,24,39,0.15))}
-.merchant-cell{display:flex;align-items:center}
+/* Delete button */
+.tx-delete-btn{
+  background: transparent;
+  border: 1px solid var(--border);
+  color: #ef4444;
+  font-weight: 700;
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.tx-delete-btn:hover{
+  background: rgba(239,68,68,0.08);
+}
 
+.icon{width:18px;height:18px;display:inline-block;margin-right:8px;vertical-align:middle;filter: drop-shadow(0 2px 4px rgba(17,24,39,0.15)); object-fit: contain}
 
 @media (max-width:900px){
   .charts{grid-template-columns:1fr;}

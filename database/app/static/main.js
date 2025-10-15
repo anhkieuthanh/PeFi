@@ -181,16 +181,50 @@ document.addEventListener('DOMContentLoaded', () => {
         const isIncome = tx.type === 'income' || tx.type === 1 || tx.type === '1' || tx.type === true;
         const typeStr = isIncome ? 'income' : 'expense';
         const tr = document.createElement('tr');
-        const iconId = isIncome ? 'icon-coin' : 'icon-pay';
-        const iconHTML = `<svg class="icon"><use xlink:href="#${iconId}"></use></svg>`;
+  const iconSrc = isIncome ? '/icon/coin.png' : '/icon/pay.png';
+  const iconHTML = `<img class="icon" src="${iconSrc}" alt="${isIncome ? 'Thu' : 'Chi'}"/>`;
         tr.innerHTML = `
           <td>${tx.date}</td>
           <td class="merchant-cell">${iconHTML}<span>${tx.merchant}</span></td>
           <td>${tx.category}</td>
           <td class="tx-amount ${typeStr}">${new Intl.NumberFormat('vi-VN').format(tx.amount)}</td>
           <td>${typeStr}</td>
+          <td><button class="tx-delete-btn" data-id="${tx.id}" title="Xóa"><img class="icon" src="/icon/trash.png" alt="Xóa"/></button></td>
         `;
         tbody.appendChild(tr);
+      });
+
+      // Attach delete handlers
+      document.querySelectorAll('.tx-delete-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.currentTarget.getAttribute('data-id');
+          if (!id) return;
+          const ok = confirm('Bạn có chắc muốn xóa giao dịch này?');
+          if (!ok) return;
+          try {
+            // Optimistic UI: hide row immediately
+            const row = e.currentTarget.closest('tr');
+            const rowPlaceholder = row.cloneNode(true);
+            row.style.opacity = 0.5;
+            row.style.pointerEvents = 'none';
+
+            const resp = await fetch(`http://127.0.0.1:5001/api/v1/bills/${id}`, { method: 'DELETE' });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            // Remove row after success (Socket.IO sẽ trigger refresh tổng quát)
+            row.remove();
+            // Optionally refresh pagination/info quickly
+            renderPager({ ...data.pagination, total_items: Math.max(0, (data.pagination?.total_items || 1) - 1) });
+          } catch (err) {
+            console.error('Xóa giao dịch thất bại:', err);
+            // Rollback UI
+            const row = e.currentTarget.closest('tr');
+            if (row) {
+              row.style.opacity = '';
+              row.style.pointerEvents = '';
+            }
+            alert('Không thể xóa giao dịch. Vui lòng thử lại.');
+          }
+        });
       });
 
       renderPager(data.pagination);

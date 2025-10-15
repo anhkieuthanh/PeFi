@@ -1,6 +1,6 @@
 # __init__.py
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 from flask_socketio import SocketIO
 from pathlib import Path
 from flask_cors import CORS
@@ -47,6 +47,12 @@ def create_app():
     @app.route('/')
     def index():
         return render_template('index.html')
+
+    # Serve icon assets located under templates/icon (to reuse existing trash.png)
+    @app.route('/icon/<path:filename>')
+    def serve_icon(filename: str):
+        icon_dir = Path(__file__).resolve().parents[1] / 'templates' / 'icon'
+        return send_from_directory(icon_dir, filename)
 
     @app.route('/dashboard_data')
     def dashboard_data():
@@ -169,7 +175,7 @@ def create_app():
 
             cursor.execute(
                 """
-                SELECT bill_date::date, merchant_name, category_name, total_amount::float, category_type::text
+                SELECT bill_id, bill_date::date, merchant_name, category_name, total_amount::float, category_type::text
                 FROM bills
                 WHERE user_id=%s AND bill_date BETWEEN %s AND %s
                 ORDER BY bill_date DESC, bill_id DESC
@@ -180,11 +186,12 @@ def create_app():
             tx_rows = cursor.fetchall()
             transactions_for_fe = [
                 {
-                    "date": r[0].strftime('%Y-%m-%d'),
-                    "merchant": r[1],
-                    "category": r[2],
-                    "amount": float(r[3]),
-                    "type": ('income' if str(r[4]).strip().lower() in ('1','income') else 'expense')
+                    "id": int(r[0]),
+                    "date": r[1].strftime('%Y-%m-%d'),
+                    "merchant": r[2],
+                    "category": r[3],
+                    "amount": float(r[4]),
+                    "type": ('income' if str(r[5]).strip().lower() in ('1','income') else 'expense')
                 } for r in tx_rows
             ]
 
