@@ -37,24 +37,34 @@ body{
 .tabs .tab.active{color:var(--fg);background:rgba(10,132,255,0.12);box-shadow: inset 0 0 0 1px rgba(10,132,255,0.35)}
 .container{padding:28px;max-width:1200px;margin:0 auto}
 .controls{margin:18px 0;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:var(--shadow)}
-.controls input,.controls select,.controls button{background:#fff;color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:8px 10px}
-.controls button{background:linear-gradient(180deg, #0a84ff 0%, #0868c9 100%);border:none;color:#fff;box-shadow:0 6px 18px rgba(10,132,255,0.25);cursor:pointer}
-.controls button:hover{filter:brightness(1.05)}
+
+/* Timeframe buttons styling */
+.timeframe-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.timeframe-controls .timeframe-btn{
+  background:transparent;border:0;padding:8px 14px;cursor:pointer;font-weight:600;color:var(--muted);
+  border-radius:8px; transition: all .2s ease;
+}
+.timeframe-controls .timeframe-btn:hover{color:var(--fg);background:rgba(0,0,0,0.04)}
+.timeframe-controls .timeframe-btn.active{
+  color: var(--accent);
+  background: rgba(10,132,255,0.12);
+  box-shadow: inset 0 0 0 1px rgba(10,132,255,0.35);
+}
+
 .stats{display:flex;gap:12px;margin-bottom:18px}
 .card.small{background:var(--surface);padding:14px;border-radius:12px;flex:1;border:1px solid var(--border);box-shadow:var(--shadow)}
 .card{background:var(--surface);padding:20px;border-radius:14px;border:1px solid var(--border);box-shadow:var(--shadow)}
-.charts{display:grid;grid-template-columns:1fr 420px;gap:30px;margin-bottom:30px}
+.charts{display:grid;grid-template-columns:1fr;gap:30px;margin-bottom:0} /* Updated */
 .label{font-size:12px;letter-spacing:.3px;text-transform:uppercase;color:var(--muted);margin-bottom:8px}
 .value{font-weight:700;font-size:22px}
 .panel.hidden{display:none}
 .chat-window{min-height:240px;border:1px solid var(--border);border-radius:12px;padding:12px;color:var(--muted);background:var(--surface-2)}
 
-/* Increase vertical spacing before the transactions section */
-.transactions{margin-top:36px}
+.transactions{margin-top:30px}
 
 /* Transactions table */
 .tx-table{width:100%;border-collapse:separate;border-spacing:0 8px;margin-top:12px}
-.tx-table thead th{font-size:12px;text-align:left;padding:6px 10px;color:var(--muted);}
+.tx-table thead th{font-size:12px;text-align:left;padding:6px 10px;color:var(--muted);font-weight:700}
 .tx-table tbody tr{background:var(--surface);border:1px solid var(--border)}
 .tx-table tbody td{padding:12px 12px;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
 .tx-table tbody tr:hover{box-shadow:0 8px 24px rgba(17,24,39,0.08)}
@@ -64,19 +74,17 @@ body{
 .tx-amount.income{color:var(--accent-3)}
 .tx-amount.expense{color:#ef4444}
 
-/* small SVG icons before merchant */
 .icon{width:18px;height:18px;display:inline-block;margin-right:8px;vertical-align:middle;filter: drop-shadow(0 2px 4px rgba(17,24,39,0.15))}
 .merchant-cell{display:flex;align-items:center}
 
 
-/* Small screens */
 @media (max-width:900px){
   .charts{grid-template-columns:1fr;}
   .tabs{display:flex}
 }
 
 /* report card */
-.report-card{margin-top:18px;padding:18px;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow)}
+.report-card{margin-top:30px;padding:18px;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow)}
 .report-controls{display:flex;gap:12px;flex-wrap:wrap}
 .report-controls .field{display:flex;flex-direction:column;min-width:180px}
 .report-controls label{color:var(--muted);font-size:12px;margin-bottom:6px}
@@ -89,3 +97,21 @@ body{
 .chart-accent-3{color:#f59e0b}
 .chart-accent-4{color:var(--accent-3)}
 
+/* Loading Indicator Styles */
+.loading-overlay {
+  position: fixed; top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(255, 255, 255, 0.7);
+  display: flex; justify-content: center; align-items: center;
+  z-index: 100; backdrop-filter: blur(4px);
+  transition: opacity 0.3s;
+}
+.loading-overlay.hidden { display: none; }
+.spinner {
+  width: 40px; height: 40px;
+  border: 4px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

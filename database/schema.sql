@@ -5,7 +5,7 @@ CREATE TABLE users (
 );
 
 -- Bảng Categories 
-CREATE TYPE category_enum AS ENUM ('income', 'expense');
+CREATE TYPE category_enum AS ENUM (1, 0); -- '1' cho Thu nhập, '0' cho Chi tiêu
 
 CREATE TABLE bills (
     bill_id SERIAL PRIMARY KEY,

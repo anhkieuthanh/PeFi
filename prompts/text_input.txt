@@ -6,7 +6,7 @@ You are an automated data extraction system. Your sole function is to analyze a 
   "total_amount": "Tổng số tiền, là số nguyên (integer or null)",
   "bill_date": "Ngày giao dịch theo định dạng YYYY-MM-DD (string or null)",
   "category_name": "Danh mục từ danh sách cho trước (string)",
-  "category_type": 1 or 0 (1 if this is Thu nhập and 0 if this bill is Chi tiêu type)
+  "category_type": 1 or 0 (1 if this is "Thu nhập" and 0 if this bill is "Chi tiêu" type)
   "note": "Mô tả ngắn gọn (string)"
 }
 
