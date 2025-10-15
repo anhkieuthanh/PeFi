@@ -218,5 +218,24 @@ document.addEventListener('DOMContentLoaded', () => {
   const nextBtn = document.getElementById('nextPage');
   if (nextBtn) nextBtn.addEventListener('click', () => { if (currentPage < totalPages) { currentPage += 1; loadData(); } });
 
+  // --- REALTIME UPDATES VIA SOCKET.IO ---
+  try {
+    if (window.io) {
+      const socket = window.io('http://127.0.0.1:5001', { transports: ['websocket', 'polling'] });
+      socket.on('connect', () => {
+        // console.log('Socket connected');
+      });
+      socket.on('bills_updated', (payload) => {
+        // Refresh data when any bill is created/updated/deleted
+        loadData();
+      });
+      socket.on('disconnect', () => {
+        // console.log('Socket disconnected');
+      });
+    }
+  } catch (e) {
+    console.warn('Socket.IO not available:', e);
+  }
+
   loadData();
 });

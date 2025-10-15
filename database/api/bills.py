@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 # Robust import of DB connector regardless of CWD
 try:
     from app.database import connect_to_heroku_db
@@ -118,6 +118,17 @@ def add_bill():
                     pass
 
         cursor.close()
+        # Emit realtime event to clients
+        try:
+            socketio = current_app.config.get('socketio_instance')
+            if socketio:
+                socketio.emit('bills_updated', {
+                    'action': 'created',
+                    'bill': bill_json,
+                })
+        except Exception:
+            pass
+
         # Return the created bill and include the transaction_info field
         resp = {**bill_json}
         if transaction_info:
@@ -214,6 +225,8 @@ def update_bill(bill_id):
         updated_bill = cursor.fetchone()
 
         if updated_bill is None:
+            connection.commit()
+            cursor.close()
             return jsonify({"error": "Không tìm thấy hóa đơn để cập nhật"}), 404
 
         connection.commit()
@@ -225,6 +238,16 @@ def update_bill(bill_id):
         bill_json = dict(zip(bill_columns, updated_bill))
         
         cursor.close()
+        # Emit realtime event to clients
+        try:
+            socketio = current_app.config.get('socketio_instance')
+            if socketio:
+                socketio.emit('bills_updated', {
+                    'action': 'updated',
+                    'bill': bill_json,
+                })
+        except Exception:
+            pass
         return jsonify(bill_json), 200
     except psycopg2.Error as e:
         return jsonify({"error": "Lỗi database"}), 500
@@ -250,6 +273,16 @@ def delete_bill(bill_id):
             
         connection.commit()
         cursor.close()
+        # Emit realtime event to clients
+        try:
+            socketio = current_app.config.get('socketio_instance')
+            if socketio:
+                socketio.emit('bills_updated', {
+                    'action': 'deleted',
+                    'bill_id': deleted_bill[0],
+                })
+        except Exception:
+            pass
         return jsonify({"message": f"Hóa đơn với ID {deleted_bill[0]} đã bị xóa."}), 200
     except psycopg2.Error as e:
         return jsonify({"error": "Lỗi database"}), 500
