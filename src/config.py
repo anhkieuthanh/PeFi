@@ -2,7 +2,7 @@ import os
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
-from google import genai
+import google.generativeai as genai
 
 _have_yaml = False
 def _load_yaml_from_fileobj(f):
@@ -71,11 +71,20 @@ _gemini_key_val = _get('google.gemini_api_key', env_var='GEMINI_API_KEY')
 GEMINI_API_KEY = str(_gemini_key_val) if _gemini_key_val is not None else None
 if not GEMINI_API_KEY:
     raise ValueError('Vui lòng đặt biến môi trường GEMINI_API_KEY hoặc cấu hình trong config.yaml')
-client = genai.Client(api_key=str(GEMINI_API_KEY))
+genai.configure(api_key=str(GEMINI_API_KEY))
 
-# --- API URLs ---
-API_BILLS_URL = _get('api.bills_url', env_var='BILLS_API_URL', default='http://127.0.0.1:5000/api/v1/bills')
+# ---- Gemini model helpers ----
+def get_text_model(model_name: str = "gemini-2.5-flash"):
+    """Return a configured text-capable GenerativeModel.
 
+    Default model is fast and supports text I/O.
+    """
+    return genai.GenerativeModel(model_name)
+
+
+def get_vision_model(model_name: str = "gemini-2.5-flash"):
+    """Return a configured multimodal GenerativeModel for image+text prompts."""
+    return genai.GenerativeModel(model_name)
 
 # --- DATABASE ---
 _db_url_val = _get('database.url', env_var='DATABASE_URL')

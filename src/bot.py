@@ -1,14 +1,28 @@
 from utils.telegram_handlers import photo_handler
 from utils.telegram_handlers import text_handler
 from telegram.ext import Application, MessageHandler, filters
+from telegram.request import HTTPXRequest
 from config import TOKEN, initialize_directories
+import logging
+
+# Configure logging to see debug output
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
 def main() -> None:
     # Khởi tạo các thư mục cần thiết
     initialize_directories()
     
-    # Tạo đối tượng Application
-    application = Application.builder().token(TOKEN).build() #type: ignore
+    # Tạo đối tượng Application với timeout cao hơn để tránh TimedOut
+    request = HTTPXRequest(
+        connect_timeout=30,
+        read_timeout=60,
+        write_timeout=30,
+        pool_timeout=30,
+    )
+    application = Application.builder().token(TOKEN).request(request).build()  # type: ignore
 
     # Thêm trình xử lý cho tin nhắn ảnh
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))

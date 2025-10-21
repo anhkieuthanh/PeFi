@@ -4,7 +4,6 @@ from pathlib import Path
 import psycopg2
 from psycopg2 import OperationalError
 from dotenv import load_dotenv
-import logging
 
 load_dotenv()
 
@@ -15,7 +14,7 @@ def connect_to_heroku_db():
         database_url = None
         try:
             # Ensure repo root on sys.path so `from src import config` works when CWD is database/
-            repo_root = Path(__file__).resolve().parents[2]
+            repo_root = Path(__file__).resolve().parents[1]
             if str(repo_root) not in sys.path:
                 sys.path.insert(0, str(repo_root))
             from src import config as app_config  # type: ignore
