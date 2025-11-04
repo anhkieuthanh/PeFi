@@ -3,6 +3,7 @@
 Use setup_project_root() in modules that need to import `src.*` when code may be
 executed from different working directories (project root vs src/).
 """
+
 from __future__ import annotations
 
 import sys
