@@ -7,8 +7,19 @@ uploads:
 google:
   gemini_api_key: "<your-gemini-api-key-here>"
 
-api:
-  bills_url: "http://127.0.0.1:5000/api/v1/bills"
+# Local LLM configuration (optional)
+llm:
+  enabled: false  # Set true to enable local LLM
+  base_url: "http://localhost:1234/v1"  # LM Studio default
+  # base_url: "http://localhost:11434/v1"  # Ollama alternative
+  model: "local-model"
+  timeout: 60
 
 database:
   url: "postgresql://user:password@host:5432/dbname"
+
+voice:
+  model: "small"  # Options: tiny, base, small, medium, large
+
+stt:
+  model_size: "base"  # Options: tiny, base, small, medium, large
