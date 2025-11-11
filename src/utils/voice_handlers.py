@@ -232,11 +232,22 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     await context.bot.send_message(chat_id=chat_id, text="❌ Lỗi khi xử lý giọng nói. Vui lòng thử lại sau.")
                 except Exception:
                     logger.exception("Failed to send error message to user after background failure")
+            finally:
+                # Best-effort: delete the audio file after background processing completes
+                try:
+                    ap = Path(audio_path)
+                    if ap.exists() and str(ap.resolve()).startswith(str(Path(UPLOAD_DIR).resolve())):
+                        ap.unlink()
+                        logger.info("Deleted background-processed audio file: %s", ap)
+                except Exception:
+                    logger.exception("Failed to delete background audio file: %s", audio_path)
 
         # Schedule background processing and return immediately
+        background_task_created = False
         try:
             # Ensure we pass a string path into the background task
-            asyncio.create_task(_process_and_respond(str(audio_for_stt), chat_id, context))
+            task = asyncio.create_task(_process_and_respond(str(audio_for_stt), chat_id, context))
+            background_task_created = True
         except Exception:
             logger.exception("Failed to schedule background voice processing")
     except Exception as e:
@@ -248,22 +259,24 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     finally:
         # Best-effort cleanup of downloaded/converted files. Only remove files under UPLOAD_DIR.
         try:
-            if dest_path is not None:
-                try:
-                    dp = Path(dest_path)
-                    if dp.exists() and str(dp.resolve()).startswith(str(Path(UPLOAD_DIR).resolve())):
-                        dp.unlink()
-                        logger.info("Deleted downloaded voice file: %s", dp)
-                except Exception:
-                    logger.exception("Failed to delete downloaded voice file: %s", dest_path)
+            # If we scheduled a background task, let it handle file deletion after processing.
+            if not background_task_created:
+                if dest_path is not None:
+                    try:
+                        dp = Path(dest_path)
+                        if dp.exists() and str(dp.resolve()).startswith(str(Path(UPLOAD_DIR).resolve())):
+                            dp.unlink()
+                            logger.info("Deleted downloaded voice file: %s", dp)
+                    except Exception:
+                        logger.exception("Failed to delete downloaded voice file: %s", dest_path)
 
-            if dest_wav is not None:
-                try:
-                    dv = Path(dest_wav)
-                    if dv.exists() and str(dv.resolve()).startswith(str(Path(UPLOAD_DIR).resolve())):
-                        dv.unlink()
-                        logger.info("Deleted converted wav: %s", dv)
-                except Exception:
-                    logger.exception("Failed to delete converted wav: %s", dest_wav)
+                if dest_wav is not None:
+                    try:
+                        dv = Path(dest_wav)
+                        if dv.exists() and str(dv.resolve()).startswith(str(Path(UPLOAD_DIR).resolve())):
+                            dv.unlink()
+                            logger.info("Deleted converted wav: %s", dv)
+                    except Exception:
+                        logger.exception("Failed to delete converted wav: %s", dest_wav)
         except Exception:
             logger.exception("Unexpected error during audio cleanup")
