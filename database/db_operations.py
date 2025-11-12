@@ -138,6 +138,8 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
       - transaction_count
       - largest_transaction: dict or None
       - top_category: dict or None
+      - save_percentage
+        - daily_average_expense
     """
     # Enforce required parameters
     if not start_date or not end_date:
@@ -177,7 +179,17 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
             total_expense = float(totals[1]) if totals and totals[1] is not None else 0.0
             transaction_count = int(totals[2]) if totals and totals[2] is not None else 0
             save_percentage = (total_income - total_expense) / total_income * 100 if total_income > 0 else 0.0
-            daily_average_expense = total_expense / ((psycopg2.sql.SQL("DATE_PART('day', %s::date - %s::date) + 1")).as_string(cursor)) if total_income > 0 else 0.0
+            
+            # Compute daily average expense using provided start/end dates
+            try:
+                from datetime import datetime
+
+                d1 = datetime.strptime(start_date, "%Y-%m-%d").date()
+                d2 = datetime.strptime(end_date, "%Y-%m-%d").date()
+                days = (d2 - d1).days + 1 if d2 >= d1 else 1
+                daily_average_expense = total_expense / days if days > 0 else 0.0
+            except Exception:
+                daily_average_expense = 0.0
             
             sql_largest = (
                 "SELECT bill_id, bill_date, merchant_name, total_amount FROM bills WHERE " + where_clause +
@@ -205,6 +217,17 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
             if row:
                 top_category = {"category_name": row[0], "total": float(row[1])}
 
+            # Per-category breakdown (top categories) - return top N (defaults to top 10)
+            sql_per_cat = (
+                "SELECT category_name, SUM(total_amount) AS total FROM bills WHERE " + where_clause +
+                " GROUP BY category_name ORDER BY total DESC LIMIT 10;"
+            )
+            cursor.execute(sql_per_cat, params)
+            rows = cursor.fetchall()
+            per_category = []
+            for r in rows:
+                per_category.append({"category_name": r[0], "total": float(r[1]) if r[1] is not None else 0.0})
+
             cursor.close()
 
             return {
@@ -213,6 +236,7 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
                 "transaction_count": transaction_count,
                 "largest_transaction": largest,
                 "top_category": top_category,
+                "per_category": per_category,
                 "save_percentage": save_percentage,
                 "daily_average_expense": daily_average_expense,
             }

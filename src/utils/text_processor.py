@@ -126,15 +126,20 @@ def classify_user_intent(raw_text: str) -> Dict[str, Any]:
 
         model = config.get_text_model()
 
-        prompt = (
-            "You are a classifier that maps user requests into one of three intents:"
-            " 'summarize_expenses' (user asks for a summary/overview of spending),"
-            " 'record_transaction' (user wants to log a payment/expense),"
-            " 'unclear' (cannot determine intent)."
-            "\n\nRespond ONLY with a JSON object with keys: intent, confidence (0-1), explanation."
-            "\nExamples:\nUser: 'Show me my expenses for last month' -> summarize_expenses\n"
-            "User: 'I spent 200k on food today' -> record_transaction\n"
-        )
+        # Load prompt from prompts/classifier_intent.txt
+        try:
+            prompt = read_promt_file(get_prompt_path("classifier_intent.txt"))
+        except Exception:
+            # fallback to the inline prompt if reading fails
+            prompt = (
+                "You are a classifier that maps user requests into one of three intents:"
+                " 'summarize_expenses' (user asks for a summary/overview of spending),"
+                " 'record_transaction' (user wants to log a payment/expense),"
+                " 'unclear' (cannot determine intent)."
+                "\n\nRespond ONLY with a JSON object with keys: intent, confidence (0-1), explanation."
+                "\nExamples:\nUser: 'Show me my expenses for last month' -> summarize_expenses\n"
+                "User: 'I spent 200k on food today' -> record_transaction\n"
+            )
 
         generation_config = {"temperature": 0.0, "response_mime_type": "application/json"}
 
@@ -406,19 +411,23 @@ def gemini_parse_report_request(raw_text: str) -> Dict[str, Any]:
     try:
         model = config.get_text_model()
 
-        prompt = (
-            "You are an assistant that extracts structured report parameters from a user's Vietnamese request.\n"
-            "Given a user message, return a JSON object with these keys:\n"
-            "- start_date: ISO date (YYYY-MM-DD) or null if not specified\n"
-            "- end_date: ISO date (YYYY-MM-DD) or null if not specified\n"
-            "- type: one of 'thu' (income), 'chi' (expense), or 'both'\n"
-            "- raw_period_text: the original substring describing the period\n\n"
-            "Examples:\n"
-            "User: 'Tổng hợp chi tiêu tháng này' -> {\"start_date\": null, \"end_date\": null, \"type\": \"chi\", \"raw_period_text\": \"tháng này\"}\n"
-            "User: 'Tổng hợp thu tháng 10/2024' -> {\"start_date\": \"2024-10-01\", \"end_date\": \"2024-10-31\", \"type\": \"thu\", \"raw_period_text\": \"tháng 10/2024\"}\n"
-            "User: 'Tổng hợp 30 ngày qua' -> {\"start_date\": null, \"end_date\": null, \"type\": \"both\", \"raw_period_text\": \"30 ngày qua\"}\n"
-            "Now respond with only a valid JSON object (no extra text)."
-        )
+        # Load prompt from prompts/report_request_parse.txt
+        try:
+            prompt = read_promt_file(get_prompt_path("report_request_parse.txt"))
+        except Exception:
+            prompt = (
+                "You are an assistant that extracts structured report parameters from a user's Vietnamese request.\n"
+                "Given a user message, return a JSON object with these keys:\n"
+                "- start_date: ISO date (YYYY-MM-DD) or null if not specified\n"
+                "- end_date: ISO date (YYYY-MM-DD) or null if not specified\n"
+                "- type: one of 'thu' (income), 'chi' (expense), or 'both'\n"
+                "- raw_period_text: the original substring describing the period\n\n"
+                "Examples:\n"
+                "User: 'Tổng hợp chi tiêu tháng này' -> {\"start_date\": null, \"end_date\": null, \"type\": \"chi\", \"raw_period_text\": \"tháng này\"}\n"
+                "User: 'Tổng hợp thu tháng 10/2024' -> {\"start_date\": \"2024-10-01\", \"end_date\": \"2024-10-31\", \"type\": \"thu\", \"raw_period_text\": \"tháng 10/2024\"}\n"
+                "User: 'Tổng hợp 30 ngày qua' -> {\"start_date\": null, \"end_date\": null, \"type\": \"both\", \"raw_period_text\": \"30 ngày qua\"}\n"
+                "Now respond with only a valid JSON object (no extra text)."
+            )
 
         generation_config = {"temperature": 0.0, "response_mime_type": "application/json"}
 
@@ -472,147 +481,17 @@ def run_report_query(user_id: int, start_date: str = None, end_date: str = None,
 
     Returns same shape as get_transactions_summary.
     """
+    # Delegator to the canonical DB helper in database/db_operations.
     try:
-        # Defensive coercion
-        if isinstance(start_date, str) and start_date.strip().lower() in ("none", ""):
-            start_date = None
-        if isinstance(end_date, str) and end_date.strip().lower() in ("none", ""):
-            end_date = None
-
-        # import connector lazily to avoid import-time DB initialization
         try:
-            from database.database import connect_to_heroku_db
+            from database.db_operations import get_transactions_summary as db_get_summary
         except Exception:
-            import sys
-            from pathlib import Path
-            db_root = Path(__file__).resolve().parents[2]
-            if str(db_root) not in sys.path:
-                sys.path.insert(0, str(db_root))
-            from database.database import connect_to_heroku_db
+            from src.database.db_operations import get_transactions_summary as db_get_summary
 
-        # normalize date inputs: accept YYYY-MM, YYYY-MM-DD, or other formats parsed by _parse_date_token
-        def _coerce_date(d):
-            from datetime import date
-
-            if d is None:
-                return None
-            if isinstance(d, date):
-                return d.isoformat()
-            if isinstance(d, str):
-                s = d.strip()
-                # YYYY-MM
-                m = re.match(r"^(\d{4})-(\d{2})$", s)
-                if m:
-                    y = int(m.group(1))
-                    mth = int(m.group(2))
-                    return date(y, mth, 1).isoformat()
-                # try ISO YYYY-MM-DD
-                m2 = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", s)
-                if m2:
-                    return s
-                # fallback to token parser
-                parsed = _parse_date_token(s)
-                return parsed.isoformat() if parsed else None
-            return None
-
-        start_date = _coerce_date(start_date)
-        end_date = _coerce_date(end_date)
-
-        with connect_to_heroku_db() as conn:
-            cur = conn.cursor()
-
-            where_parts = ["user_id = %s"]
-            params = [user_id]
-
-            if start_date is not None and end_date is not None:
-                where_parts.append("bill_date BETWEEN %s AND %s")
-                params.extend([start_date, end_date])
-            elif start_date is not None:
-                where_parts.append("bill_date >= %s")
-                params.append(start_date)
-            elif end_date is not None:
-                where_parts.append("bill_date <= %s")
-                params.append(end_date)
-
-            if tx_type == "thu":
-                where_parts.append("category_type::text = '1'")
-            elif tx_type == "chi":
-                where_parts.append("category_type::text <> '1'")
-
-            where_clause = " AND ".join(where_parts)
-
-            sql_totals = (
-                "SELECT SUM(CASE WHEN category_type::text = '1' THEN total_amount ELSE 0 END) AS total_income, "
-                "SUM(CASE WHEN category_type::text <> '1' THEN total_amount ELSE 0 END) AS total_expense, "
-                "COUNT(*) AS transaction_count FROM bills WHERE " + where_clause + ";"
-            )
-            # show the fully interpolated query for debugging
-            try:
-                full_sql = cur.mogrify(sql_totals, params).decode()
-                logger.info("MOGRIFIED totals SQL: %s", full_sql)
-                print(f"MOGRIFIED totals SQL: {full_sql}")
-            except Exception:
-                logger.info("DB query totals: %s | params=%s", sql_totals, params)
-                print(f"DB query totals: {sql_totals} | params={params}")
-            cur.execute(sql_totals, params)
-            totals = cur.fetchone()
-            total_income = float(totals[0]) if totals and totals[0] is not None else 0.0
-            total_expense = float(totals[1]) if totals and totals[1] is not None else 0.0
-            transaction_count = int(totals[2]) if totals and totals[2] is not None else 0
-
-            sql_largest = (
-                "SELECT bill_id, bill_date, merchant_name, total_amount FROM bills WHERE " + where_clause +
-                " ORDER BY total_amount DESC LIMIT 1;"
-            )
-            try:
-                full_sql = cur.mogrify(sql_largest, params).decode()
-                logger.info("MOGRIFIED largest SQL: %s", full_sql)
-                print(f"MOGRIFIED largest SQL: {full_sql}")
-            except Exception:
-                logger.info("DB query largest: %s | params=%s", sql_largest, params)
-                print(f"DB query largest: {sql_largest} | params={params}")
-            cur.execute(sql_largest, params)
-            row = cur.fetchone()
-            largest = None
-            if row:
-                largest = {
-                    "bill_id": row[0],
-                    "bill_date": row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1]),
-                    "merchant_name": row[2],
-                    "amount": float(row[3]),
-                }
-
-            sql_top_cat = (
-                "SELECT category_name, SUM(total_amount) AS total FROM bills WHERE " + where_clause +
-                " GROUP BY category_name ORDER BY total DESC LIMIT 1;"
-            )
-            try:
-                full_sql = cur.mogrify(sql_top_cat, params).decode()
-                logger.info("MOGRIFIED top_cat SQL: %s", full_sql)
-                print(f"MOGRIFIED top_cat SQL: {full_sql}")
-            except Exception:
-                logger.info("DB query top category: %s | params=%s", sql_top_cat, params)
-                print(f"DB query top category: {sql_top_cat} | params={params}")
-            cur.execute(sql_top_cat, params)
-            row = cur.fetchone()
-            top_category = None
-            if row:
-                top_category = {"category_name": row[0], "total": float(row[1])}
-
-            cur.close()
-
-            return {
-                "total_income": total_income,
-                "total_expense": total_expense,
-                "transaction_count": transaction_count,
-                "largest_transaction": largest,
-                "top_category": top_category,
-            }
+        return db_get_summary(user_id, start_date, end_date, tx_type)
     except Exception:
-        logger.exception("Error querying DB in run_report_query")
+        logger.exception("Error delegating run_report_query to central DB helper")
         return {"error": "Database error when summarizing transactions"}
-
-
 def generate_report_from_gemini_and_db(raw_text: str, user_id: int, use_gemini_writer: bool = False) -> Dict[str, Any]:
     """High-level helper: use Gemini to extract params, query DB, and build a report text.
 
@@ -628,17 +507,23 @@ def generate_report_from_gemini_and_db(raw_text: str, user_id: int, use_gemini_w
         typ = report_req.get("type", "both")
 
         # Prefer the central reporting.get_summary so both code paths use the same
-        # DB aggregation and classification rules.
+        # DB aggregation and classification rules. If reporting module isn't
+        # importable (running from different paths), fall back to the central
+        # database helper directly.
         try:
             from src.reporting.reporting import get_summary as reporting_get_summary
         except Exception:
-            # fallback to local run_report_query if importing the reporting module fails
             reporting_get_summary = None
 
         if reporting_get_summary:
             summary = reporting_get_summary(user_id, start, end, typ)
         else:
-            summary = run_report_query(user_id, start, end, typ)
+            # Import the central DB helper directly
+            try:
+                from database.db_operations import get_transactions_summary as reporting_get_summary
+            except Exception:
+                from src.database.db_operations import get_transactions_summary as reporting_get_summary
+            summary = reporting_get_summary(user_id, start, end, typ)
         if not summary or summary.get("error"):
             return {"success": False, "error": "Lỗi khi truy vấn dữ liệu"}
 

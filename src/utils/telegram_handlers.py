@@ -41,13 +41,13 @@ except Exception:  # ensure repo root is on sys.path then retry
 
 # Import database operations
 try:
-    from database.db_operations import add_bill, create_user, get_user_by_name, get_transactions_summary
+    from database.db_operations import add_bill, get_transactions_summary
 except Exception:
     # Ensure database module is in path
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    from database.db_operations import add_bill, create_user, get_user_by_name, get_transactions_summary
+    from database.db_operations import add_bill, get_transactions_summary
 
 # Import Local LLM agent for insights
 try:
@@ -259,88 +259,3 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await context.bot.send_message(
             chat_id=chat_id, text="🙁 Đã có lỗi xảy ra trong quá trình xử lý. Vui lòng thử lại sau."
         )
-
-
-async def _ensure_user_and_get_id(update: Update) -> Optional[int]:
-    """Map Telegram user to DB user and return user_id (create if missing)."""
-    try:
-        tg_user = update.effective_user
-        if tg_user is None:
-            return None
-        tg_id = getattr(tg_user, "id", None)
-        username = getattr(tg_user, "username", None)
-        user_name = username or (f"tg_{tg_id}" if tg_id is not None else "tg_unknown")
-        # Try to find existing user
-        user = get_user_by_name(user_name)
-        if not user:
-            res = create_user(user_name)
-            if not isinstance(res, dict) or not res.get("success"):
-                return None
-            user = res.get("user")
-        if isinstance(user, dict):
-            uid = user.get("user_id") or user.get("id")
-            return int(uid) if uid is not None else None
-        return None
-    except Exception:
-        logger.exception("Failed to ensure user in database")
-        return None
-
-
-async def insights_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate AI insights using local LLM; fallback to quick summary on failure."""
-    if not update.message:
-        return
-    chat_id = update.message.chat_id
-    await context.bot.send_message(chat_id=chat_id, text="🔎 Đang tạo insights, có thể mất 1-2 phút...")
-    try:
-        user_id = await _ensure_user_and_get_id(update)
-        if not user_id:
-            try:
-                import config as _cfg
-                user_id = getattr(_cfg, "DEFAULT_USER_ID", 2)
-            except Exception:
-                user_id = 2
-        # Create agent in a thread to avoid blocking
-        agent = await asyncio.to_thread(create_llm_db_agent)
-        if not agent:
-            await context.bot.send_message(
-                chat_id=chat_id, text="❌ Không kết nối được LLM local. Hãy bật server tại http://localhost:1234."
-            )
-            return
-        # Try AI insights with longer timeout (inside agent implementation)
-        insights_text = await asyncio.to_thread(agent.get_spending_insights, user_id, 30)
-        if not insights_text or "Không thể tạo insights" in insights_text:
-            # Fallback to quick summary
-            summary = await asyncio.to_thread(agent.get_quick_summary, user_id, 30)
-            await context.bot.send_message(chat_id=chat_id, text=summary)
-            return
-        await context.bot.send_message(chat_id=chat_id, text=insights_text)
-    except Exception:
-        logger.exception("Error in insights_handler")
-        await context.bot.send_message(
-            chat_id=chat_id, text="❌ Lỗi khi tạo insights. Thử lại sau hoặc dùng /summary để xem tóm tắt nhanh."
-        )
-
-
-async def summary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a quick spending summary without using LLM."""
-    if not update.message:
-        return
-    chat_id = update.message.chat_id
-    try:
-        user_id = await _ensure_user_and_get_id(update)
-        if not user_id:
-            try:
-                import config as _cfg
-                user_id = getattr(_cfg, "DEFAULT_USER_ID", 2)
-            except Exception:
-                user_id = 2
-        agent = await asyncio.to_thread(create_llm_db_agent)
-        if not agent:
-            await context.bot.send_message(chat_id=chat_id, text="❌ Không kết nối được database để tạo tóm tắt.")
-            return
-        summary = await asyncio.to_thread(agent.get_quick_summary, user_id, 30)
-        await context.bot.send_message(chat_id=chat_id, text=summary)
-    except Exception:
-        logger.exception("Error in summary_handler")
-        await context.bot.send_message(chat_id=chat_id, text="❌ Lỗi khi tạo tóm tắt. Vui lòng thử lại sau.")

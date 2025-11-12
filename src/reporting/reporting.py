@@ -3,128 +3,45 @@ import logging
 import json
 from datetime import date
 
-import psycopg2
-
 try:
     # Prefer the project's config which reads config.yaml
     from src import config
 except Exception:
     import config
+try:
+    # prompt helpers
+    from src.utils.promt import get_prompt_path, read_promt_file
+except Exception:
+    from utils.promt import get_prompt_path, read_promt_file
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-def _get_conn():
-    """Return a psycopg2 connection using `config.DATABASE_URL`.
-
-    Expects `config.DATABASE_URL` to be set in `config.yaml`.
-    """
-    db_url = getattr(config, "DATABASE_URL", None)
-    if not db_url:
-        raise RuntimeError("DATABASE_URL is not configured in config.yaml")
-    return psycopg2.connect(db_url)
-
-
 def get_summary(user_id: int, start_date: Optional[str], end_date: Optional[str], tx_type: str = "both") -> Dict[str, Any]:
-    """Query DB and compute aggregated summary for a user between start_date and end_date.
+    """Delegate to central DB helper in `database.db_operations` which is the single
+    source of truth for SQL queries. This keeps DB code consolidated.
 
-    Classification rule (SQL):
-      - 'Thu' if category_name ILIKE 'Lương' OR category_name ILIKE '%thu nhập%'
-      - 'Chi' otherwise
-
-    Returns JSON dict with keys:
-      - total_income
-      - total_expense
-      - transaction_count
-      - per_category: list of {category_name, total}
-      - top_category: {category_name, total} or None
+    Returns the same shape as the previous local implementation (includes per_category).
     """
-    # Build dynamic WHERE clause. tx_type may be 'thu', 'chi' or 'both'.
-    where_parts: List[str] = ["user_id = %s"]
-    params: List[Any] = [user_id]
-    if start_date and end_date:
-        where_parts.append("bill_date BETWEEN %s AND %s")
-        params.extend([start_date, end_date])
-    elif start_date:
-        where_parts.append("bill_date >= %s")
-        params.append(start_date)
-    elif end_date:
-        where_parts.append("bill_date <= %s")
-        params.append(end_date)
-
-    where_clause = " AND ".join(where_parts)
-
-    # Apply tx_type filter: classify by category_name text
-    # - 'thu' when category_name lower = 'lương' OR LIKE '%thu nhập%'
-    # - 'chi' otherwise
-    if tx_type == "thu":
-        where_clause = where_clause + " AND (lower(category_name) = %s OR lower(category_name) LIKE %s)"
-        params.extend(["lương", "%thu nhập%"])
-    elif tx_type == "chi":
-        where_clause = where_clause + " AND NOT (lower(category_name) = %s OR lower(category_name) LIKE %s)"
-        params.extend(["lương", "%thu nhập%"])
-
-    # Totals query: compute income and expense using CASE
-    # Parameterize LIKE patterns to avoid raw '%' in the SQL string which can confuse
-    # DB-API formatting. We'll pass the pattern as parameters.
-    sql_totals = (
-        "SELECT\n"
-        "  SUM(CASE WHEN lower(category_name) = %s OR lower(category_name) LIKE %s THEN total_amount ELSE 0 END) AS total_income,\n"
-        "  SUM(CASE WHEN NOT (lower(category_name) = %s OR lower(category_name) LIKE %s) THEN total_amount ELSE 0 END) AS total_expense,\n"
-        "  COUNT(*) AS transaction_count\n"
-        "FROM bills WHERE "
-        + where_clause
-        + ";"
-    )
-
-    # Per-category breakdown for expenses (Chi)
-    sql_per_cat = (
-        "SELECT category_name, SUM(total_amount) as total FROM bills WHERE "
-        + where_clause
-        + " GROUP BY category_name ORDER BY total DESC;"
-    )
-
-    conn = _get_conn()
     try:
-        with conn:
-            with conn.cursor() as cur:
-                # SQL places the CASE placeholders before the WHERE placeholders,
-                # so the params must be in the same order: patterns first, then
-                # the WHERE params (user_id, start, end)
-                totals_params = [
-                    "lương",
-                    "%thu nhập%",
-                    "lương",
-                    "%thu nhập%",
-                ] + list(params)
-                logger.info("Executing totals SQL: %s | params=%s", sql_totals, totals_params)
-                cur.execute(sql_totals, totals_params)
-                totals = cur.fetchone()
+        # import lazily to avoid import-time DB initialization
+        try:
+            from database.db_operations import get_transactions_summary as db_get_summary
+        except Exception:
+            # allow importing via package path when running from src/
+            from src.database.db_operations import get_transactions_summary as db_get_summary
 
-                total_income = float(totals[0]) if totals and totals[0] is not None else 0.0
-                total_expense = float(totals[1]) if totals and totals[1] is not None else 0.0
-                transaction_count = int(totals[2]) if totals and totals[2] is not None else 0
+        summary = db_get_summary(user_id, start_date, end_date, tx_type)
+        # ensure keys exist for downstream code
+        if not summary or summary.get("error"):
+            return {"error": "Database error when summarizing transactions"}
 
-                # per-category
-                logger.info("Executing per-category SQL: %s | params=%s", sql_per_cat, params)
-                cur.execute(sql_per_cat, params)
-                rows = cur.fetchall()
-                per_category = []
-                for r in rows:
-                    per_category.append({"category_name": r[0], "total": float(r[1]) if r[1] is not None else 0.0})
-
-                top_category = per_category[0] if per_category else None
-
-                return {
-                    "total_income": total_income,
-                    "total_expense": total_expense,
-                    "transaction_count": transaction_count,
-                    "per_category": per_category,
-                    "top_category": top_category,
-                }
-    finally:
-        conn.close()
+        # reporting module expects per_category and top_category; db helper now provides per_category
+        return summary
+    except Exception:
+        logger.exception("Error delegating get_summary to db_operations")
+        return {"error": "Internal error while preparing summary"}
 
 
 def generate_report(summary: Dict[str, Any], period_text: str = "", tx_type: str = "both") -> Dict[str, Any]:
@@ -195,18 +112,25 @@ def generate_report(summary: Dict[str, Any], period_text: str = "", tx_type: str
     elif tx_type == "chi":
         template_fragment = TEMPLATE_CHI
 
-    prompt = (
-        "You are an expert Vietnamese financial-report writer and formatter.\n\n"
-        "CONSTRAINTS:\n"
-        "- Use ONLY the numeric values in the JSON context. Do NOT change, recompute, or summarize the numbers beyond showing them.\n"
-        "- Output MUST be valid Markdown. Use headings, bullet lists, and a small ASCII bar chart for top categories.\n"
-        "- Keep the language professional and concise. Aim for clarity and visual readability on messaging apps.\n\n"
-    "INPUT JSON:\n"
-    + json.dumps(context, ensure_ascii=False)
-    + "\n\n"
-    "Use this TEMPLATE as an exact formatting guideline (fill placeholders with values from JSON):\n\n"
-    + template_fragment
-        + "\n\nTASK:\n"
+    # Load the report-generation prompt template from prompts/report_generation.txt.
+    # The file contains placeholders {INPUT_JSON} and {TEMPLATE_FRAGMENT} which we'll fill.
+    try:
+        prompt_template = read_promt_file(get_prompt_path("report_generation.txt"))
+        prompt = prompt_template.format(INPUT_JSON=json.dumps(context, ensure_ascii=False), TEMPLATE_FRAGMENT=template_fragment)
+    except Exception:
+        # Fallback to inline composition if reading templated file fails
+        prompt = (
+            "You are an expert Vietnamese financial-report writer and formatter.\n\n"
+            "CONSTRAINTS:\n"
+            "- Use ONLY the numeric values in the JSON context. Do NOT change, recompute, or summarize the numbers beyond showing them.\n"
+            "- Output MUST be valid Markdown. Use headings, bullet lists, and a small ASCII bar chart for top categories.\n"
+            "- Keep the language professional and concise. Aim for clarity and visual readability on messaging apps.\n\n"
+        "INPUT JSON:\n"
+        + json.dumps(context, ensure_ascii=False)
+        + "\n\n"
+        "Use this TEMPLATE as an exact formatting guideline (fill placeholders with values from JSON):\n\n"
+        + template_fragment
+            + "\n\nTASK:\n"
         "Produce a Markdown report in Vietnamese with these sections:\n"
         "1) H1 title with the period.\n"
         "2) A short 'Tóm tắt nhanh' paragraph (1-2 sentences) using the provided numbers only.\n"
@@ -216,7 +140,7 @@ def generate_report(summary: Dict[str, Any], period_text: str = "", tx_type: str
         "6) Keep total output length reasonably short (not more than ~800 characters), but prefer clarity over strict brevity.\n\n"
         "IMPORTANT: Under no circumstances should you invent additional numeric values or modify the provided numbers. If a value is 0, display '0 VND'.\n\n"
         "Now output only the Markdown report (no extra commentary)."
-    )
+        )
 
     # Use project's Gemini model helper
     model = config.get_text_model()
