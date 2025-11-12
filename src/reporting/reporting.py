@@ -1,20 +1,3 @@
-"""Reporting module: Query DB and generate natural-language reports via Gemini.
-
-Structure:
-  - get_summary(user_id, start_date, end_date): returns aggregated JSON from DB
-  - generate_report(summary): sends JSON context to LLM to produce a short Vietnamese report
-
-Usage:
-  python -m src.reporting.reporting  # runs example
-
-Requirements:
-  - psycopg2
-  - the project's `src.config` configured with `DATABASE_URL` and Gemini API
-
-Design:
-  Data -> Logic -> Language (LLM)
-  The LLM only formats language. All computations are done by SQL.
-"""
 from typing import Any, Dict, List, Optional
 import logging
 import json

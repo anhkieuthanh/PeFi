@@ -125,82 +125,10 @@ def add_bill(bill_data: Dict[str, Any]) -> Dict[str, Any]:
     # connection returned to pool by context manager
 
 
-def create_user(user_name: str) -> Dict[str, Any]:
-    """
-    Create a new user in the database.
-
-    Args:
-        user_name: Name of the user
-
-    Returns:
-        Dictionary containing:
-            - success: bool
-            - user: dict (user data if successful)
-            - error: str (if failed)
-    """
-    sql = "INSERT INTO users (user_name) VALUES (%s) RETURNING *;"
-    try:
-        with connect_to_heroku_db() as connection:
-            cursor = connection.cursor()
-            cursor.execute(sql, (user_name,))
-            new_user = cursor.fetchone()
-            connection.commit()
-
-        if cursor.description is None or new_user is None:
-            cursor.close()
-            return {"success": False, "error": "Không thể tạo người dùng"}
-
-        user_columns = [desc[0] for desc in cursor.description]
-        new_user_dict = dict(zip(user_columns, new_user))
-        cursor.close()
-
-        return {"success": True, "user": new_user_dict}
-
-    except psycopg2.Error as e:
-        logger.exception("Database error when creating user")
-        if e.pgcode == errorcodes.UNIQUE_VIOLATION:
-            return {"success": False, "error": "Tên người dùng đã tồn tại"}
-        return {"success": False, "error": "Lỗi database"}
-
-    # connection returned to pool by context manager
-
-
-def get_user_by_name(user_name: str) -> Optional[Dict[str, Any]]:
-    """
-    Get user by username.
-
-    Args:
-        user_name: Name of the user
-
-    Returns:
-        User dictionary if found, None otherwise
-    """
-    sql = "SELECT * FROM users WHERE user_name = %s;"
-    try:
-        with connect_to_heroku_db() as connection:
-            cursor = connection.cursor()
-            cursor.execute(sql, (user_name,))
-            user = cursor.fetchone()
-
-            if cursor.description is None or user is None:
-                cursor.close()
-                return None
-
-            user_columns = [desc[0] for desc in cursor.description]
-            user_dict = dict(zip(user_columns, user))
-            cursor.close()
-
-            return user_dict
-
-    except Exception:
-        logger.exception("Error getting user by name")
-        return None
-
-    # connection returned to pool by context manager
-
-
 def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None, end_date: Optional[str] = None, tx_type: str = "both") -> Dict[str, Any]:
     """Return aggregated transaction summary for a user between start_date and end_date.
+
+    start_date and end_date are required (ISO format YYYY-MM-DD).
 
     tx_type: 'thu' | 'chi' | 'both'
 
@@ -211,28 +139,23 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
       - largest_transaction: dict or None
       - top_category: dict or None
     """
+    # Enforce required parameters
+    if not start_date or not end_date:
+        return {"error": "start_date and end_date are required and must be provided in YYYY-MM-DD format"}
+
     try:
-        # Defensive: if caller passed the literal string 'None' or empty strings, treat as None
+        # Defensive: if caller passed the literal string 'None' or empty strings, treat as missing
         if isinstance(start_date, str) and start_date.strip().lower() in ("none", ""):
-            start_date = None
+            return {"error": "start_date and end_date are required and must be provided in YYYY-MM-DD format"}
         if isinstance(end_date, str) and end_date.strip().lower() in ("none", ""):
-            end_date = None
+            return {"error": "start_date and end_date are required and must be provided in YYYY-MM-DD format"}
+
         with connect_to_heroku_db() as connection:
             cursor = connection.cursor()
 
-            # Build WHERE clause dynamically to handle None start/end
-            where_parts = ["user_id = %s"]
-            params = [user_id]
-
-            if start_date is not None and end_date is not None:
-                where_parts.append("bill_date BETWEEN %s AND %s")
-                params.extend([start_date, end_date])
-            elif start_date is not None:
-                where_parts.append("bill_date >= %s")
-                params.append(start_date)
-            elif end_date is not None:
-                where_parts.append("bill_date <= %s")
-                params.append(end_date)
+            # Build WHERE clause (both dates present)
+            where_parts = ["user_id = %s", "bill_date BETWEEN %s AND %s"]
+            params = [user_id, start_date, end_date]
 
             # Apply type filter
             if tx_type == "thu":
@@ -253,8 +176,9 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
             total_income = float(totals[0]) if totals and totals[0] is not None else 0.0
             total_expense = float(totals[1]) if totals and totals[1] is not None else 0.0
             transaction_count = int(totals[2]) if totals and totals[2] is not None else 0
-
-            # Largest transaction
+            save_percentage = (total_income - total_expense) / total_income * 100 if total_income > 0 else 0.0
+            daily_average_expense = total_expense / ((psycopg2.sql.SQL("DATE_PART('day', %s::date - %s::date) + 1")).as_string(cursor)) if total_income > 0 else 0.0
+            
             sql_largest = (
                 "SELECT bill_id, bill_date, merchant_name, total_amount FROM bills WHERE " + where_clause +
                 " ORDER BY total_amount DESC LIMIT 1;"
@@ -289,6 +213,8 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
                 "transaction_count": transaction_count,
                 "largest_transaction": largest,
                 "top_category": top_category,
+                "save_percentage": save_percentage,
+                "daily_average_expense": daily_average_expense,
             }
 
     except Exception:
