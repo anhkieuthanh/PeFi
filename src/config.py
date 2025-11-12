@@ -124,3 +124,12 @@ try:
     LLM_DEFAULT_TIMEOUT = int(_get("llm.default_timeout", default=120))
 except Exception:
     LLM_DEFAULT_TIMEOUT = 120
+
+
+# Default user id to use when a request cannot be mapped to a DB user.
+# This can be overridden in config.yaml under `app.default_user_id` if desired,
+# but will fall back to 2 to match the project's current test/default behavior.
+try:
+    DEFAULT_USER_ID = int(_get("app.default_user_id", default=2))
+except Exception:
+    DEFAULT_USER_ID = 2
