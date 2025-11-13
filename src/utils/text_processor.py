@@ -302,19 +302,28 @@ def extract_period_and_type(raw_text: str) -> Dict[str, Any]:
         month = int(m.group(1))
         year = int(m.group(2)) if m.group(2) else today.year
         start = date(year, month, 1)
-        # compute last day
+        
+        # compute last day of the month
         if month == 12:
-            end = date(year + 1, 1, 1) - timedelta(days=1)
+            last_day_of_month = date(year + 1, 1, 1) - timedelta(days=1)
         else:
-            end = date(year, month + 1, 1) - timedelta(days=1)
+            last_day_of_month = date(year, month + 1, 1) - timedelta(days=1)
+        
+        # If the requested month is the current month and hasn't finished yet,
+        # use today as the end date instead of the last day of the month
+        if year == today.year and month == today.month and today < last_day_of_month:
+            end = today
+        else:
+            end = last_day_of_month
+            
         return {"start_date": start.isoformat(), "end_date": end.isoformat(), "type": typ, "raw_period_text": m.group(0)}
 
     # 'tháng này'
     if "tháng này" in txt:
         start = today.replace(day=1)
-        # last day of month
-        next_month = (start.replace(day=28) + timedelta(days=4)).replace(day=1)
-        end = next_month - timedelta(days=1)
+        # For "this month", always use today as end date (not the last day of month)
+        # since the month hasn't finished yet
+        end = today
         return {"start_date": start.isoformat(), "end_date": end.isoformat(), "type": typ, "raw_period_text": "tháng này"}
 
     # 'tháng trước'

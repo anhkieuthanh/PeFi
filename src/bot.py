@@ -7,8 +7,16 @@ from config import TOKEN, initialize_directories
 from utils.telegram_handlers import photo_handler, text_handler
 from utils.voice_handlers import voice_handler
 
-# Configure logging to see debug output
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# Configure logging - reduce noise from httpx and telegram
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
+# Reduce logging from external libraries
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext").setLevel(logging.WARNING)
 
 
 def main() -> None:
@@ -31,8 +39,10 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
 
     application.add_handler(MessageHandler(filters.VOICE, voice_handler))
+    
     # Bắt đầu chạy bot
-    print("Bot đang chạy...")
+    logger = logging.getLogger(__name__)
+    logger.info("🤖 Bot started successfully")
     application.run_polling()
 
 
