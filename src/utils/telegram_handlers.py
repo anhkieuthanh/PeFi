@@ -49,16 +49,6 @@ except Exception:
         sys.path.insert(0, str(repo_root))
     from database.db_operations import add_bill, get_transactions_summary
 
-# Import Local LLM agent for insights
-try:
-    from llm.llm import create_llm_db_agent
-except Exception:
-    # Ensure llm module is importable from repo root
-    repo_root = Path(__file__).resolve().parents[2]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    from llm.llm import create_llm_db_agent
-
 UPLOAD_DIR = config.UPLOAD_DIR
 
 config.initialize_directories()
@@ -137,8 +127,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         await context.bot.send_message(chat_id=chat_id, text="Đã nhận được thông tin đang xử lý...")
-        # Heuristic: detect explicit report requests and bypass LLM classification
+        
+        # Preprocess text once and reuse
         norm = preprocess_text(user_text).lower()
+        
+        # Use heuristic detection for reports (faster than LLM classification)
         is_report_heuristic = False
         if (
             "tổng chi" in norm
@@ -153,8 +146,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if is_report_heuristic:
             resp = {"loai_yeu_cau": "Báo cáo", "reply_text": "Đang tạo báo cáo...", "classification": {}}
         else:
-            # First classify the user's intent and generate an appropriate reply
+            # Classify the user's intent and generate an appropriate reply
             resp = generate_user_response(user_text)
+        
         loai = resp.get("loai_yeu_cau")
         reply_text = resp.get("reply_text", "")
         classification = resp.get("classification")
@@ -170,20 +164,13 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 except Exception:
                     user_id = 2
 
-                # Try deterministic extraction first (local parser). If it fails, fall back
-                # to the existing Gemini-based extractor.
+                # Use deterministic extraction (no LLM fallback for better performance)
                 report_req = extract_period_and_type(user_text)
                 if not report_req:
-                    # fallback: use Gemini to extract and build report (existing helper)
-                    result = await asyncio.to_thread(generate_report_from_gemini_and_db, user_text, user_id)
-                    if not result.get("success"):
-                        await context.bot.send_message(chat_id=chat_id, text=(result.get("error") or "Không thể tạo báo cáo."))
-                        return
-                    rpt = str(result.get("report_text") or "")
-                    # Print and log the report before sending
-                    logger.info("Report to send (fallback gemini extractor): %s", rpt)
-                    print("REPORT_TO_SEND:", rpt)
-                    await context.bot.send_message(chat_id=chat_id, text=rpt)
+                    await context.bot.send_message(
+                        chat_id=chat_id, 
+                        text="Không thể hiểu yêu cầu báo cáo. Vui lòng thử:\n• 'tổng hợp tháng 11'\n• 'báo cáo 30 ngày'\n• 'tổng chi tháng này'"
+                    )
                     return
 
                 # We have start/end/type from deterministic parser; query DB (in thread)

@@ -139,7 +139,8 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
       - largest_transaction: dict or None
       - top_category: dict or None
       - save_percentage
-        - daily_average_expense
+      - daily_average_expense
+      - per_category: list of dicts
     """
     # Enforce required parameters
     if not start_date or not end_date:
@@ -152,10 +153,20 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
         if isinstance(end_date, str) and end_date.strip().lower() in ("none", ""):
             return {"error": "start_date and end_date are required and must be provided in YYYY-MM-DD format"}
 
+        # Compute daily average expense using provided start/end dates
+        try:
+            from datetime import datetime
+
+            d1 = datetime.strptime(start_date, "%Y-%m-%d").date()
+            d2 = datetime.strptime(end_date, "%Y-%m-%d").date()
+            days = (d2 - d1).days + 1 if d2 >= d1 else 1
+        except Exception:
+            days = 1
+
         with connect_to_heroku_db() as connection:
             cursor = connection.cursor()
 
-            # Build WHERE clause (both dates present)
+            # Build WHERE clause
             where_parts = ["user_id = %s", "bill_date BETWEEN %s AND %s"]
             params = [user_id, start_date, end_date]
 
@@ -167,61 +178,66 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
 
             where_clause = " AND ".join(where_parts)
 
-            # Totals
-            sql_totals = (
-                "SELECT SUM(CASE WHEN category_type::text = '1' THEN total_amount ELSE 0 END) AS total_income, "
-                "SUM(CASE WHEN category_type::text <> '1' THEN total_amount ELSE 0 END) AS total_expense, "
-                "COUNT(*) AS transaction_count FROM bills WHERE " + where_clause + ";"
+            # Optimized single query using CTEs to get all data at once
+            # Note: We use the same WHERE clause 3 times, so we need params repeated 3 times
+            sql = f"""
+            WITH totals AS (
+                SELECT 
+                    SUM(CASE WHEN category_type::text = '1' THEN total_amount ELSE 0 END) AS total_income,
+                    SUM(CASE WHEN category_type::text <> '1' THEN total_amount ELSE 0 END) AS total_expense,
+                    COUNT(*) AS transaction_count
+                FROM bills WHERE {where_clause}
+            ),
+            largest AS (
+                SELECT bill_id, bill_date, merchant_name, total_amount
+                FROM bills WHERE {where_clause}
+                ORDER BY total_amount DESC LIMIT 1
+            ),
+            top_cat AS (
+                SELECT category_name, SUM(total_amount) AS total
+                FROM bills WHERE {where_clause}
+                GROUP BY category_name ORDER BY total DESC LIMIT 1
             )
-            cursor.execute(sql_totals, params)
-            totals = cursor.fetchone()
-            total_income = float(totals[0]) if totals and totals[0] is not None else 0.0
-            total_expense = float(totals[1]) if totals and totals[1] is not None else 0.0
-            transaction_count = int(totals[2]) if totals and totals[2] is not None else 0
-            save_percentage = (total_income - total_expense) / total_income * 100 if total_income > 0 else 0.0
+            SELECT 
+                t.total_income, t.total_expense, t.transaction_count,
+                l.bill_id, l.bill_date, l.merchant_name, l.total_amount,
+                tc.category_name, tc.total
+            FROM totals t
+            LEFT JOIN largest l ON true
+            LEFT JOIN top_cat tc ON true;
+            """
             
-            # Compute daily average expense using provided start/end dates
-            try:
-                from datetime import datetime
-
-                d1 = datetime.strptime(start_date, "%Y-%m-%d").date()
-                d2 = datetime.strptime(end_date, "%Y-%m-%d").date()
-                days = (d2 - d1).days + 1 if d2 >= d1 else 1
-                daily_average_expense = total_expense / days if days > 0 else 0.0
-            except Exception:
-                daily_average_expense = 0.0
-            
-            sql_largest = (
-                "SELECT bill_id, bill_date, merchant_name, total_amount FROM bills WHERE " + where_clause +
-                " ORDER BY total_amount DESC LIMIT 1;"
-            )
-            cursor.execute(sql_largest, params)
+            # We use the WHERE clause 3 times in the CTEs, so repeat params 3 times
+            all_params = params * 3
+            cursor.execute(sql, all_params)
             row = cursor.fetchone()
+            
+            # Extract main aggregates
+            total_income = float(row[0]) if row and row[0] is not None else 0.0
+            total_expense = float(row[1]) if row and row[1] is not None else 0.0
+            transaction_count = int(row[2]) if row and row[2] is not None else 0
+            
+            # Largest transaction
             largest = None
-            if row:
+            if row and row[3] is not None:
                 largest = {
-                    "bill_id": row[0],
-                    "bill_date": row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1]),
-                    "merchant_name": row[2],
-                    "amount": float(row[3]),
+                    "bill_id": row[3],
+                    "bill_date": row[4].isoformat() if hasattr(row[4], "isoformat") else str(row[4]),
+                    "merchant_name": row[5],
+                    "amount": float(row[6]),
                 }
-
+            
             # Top category
-            sql_top_cat = (
-                "SELECT category_name, SUM(total_amount) AS total FROM bills WHERE " + where_clause +
-                " GROUP BY category_name ORDER BY total DESC LIMIT 1;"
-            )
-            cursor.execute(sql_top_cat, params)
-            row = cursor.fetchone()
             top_category = None
-            if row:
-                top_category = {"category_name": row[0], "total": float(row[1])}
-
-            # Per-category breakdown (top categories) - return top N (defaults to top 10)
-            sql_per_cat = (
-                "SELECT category_name, SUM(total_amount) AS total FROM bills WHERE " + where_clause +
-                " GROUP BY category_name ORDER BY total DESC LIMIT 10;"
-            )
+            if row and row[7] is not None:
+                top_category = {"category_name": row[7], "total": float(row[8])}
+            
+            # Per-category breakdown (separate query since it returns multiple rows)
+            sql_per_cat = f"""
+                SELECT category_name, SUM(total_amount) AS total
+                FROM bills WHERE {where_clause}
+                GROUP BY category_name ORDER BY total DESC LIMIT 10
+            """
             cursor.execute(sql_per_cat, params)
             rows = cursor.fetchall()
             per_category = []
@@ -229,6 +245,10 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
                 per_category.append({"category_name": r[0], "total": float(r[1]) if r[1] is not None else 0.0})
 
             cursor.close()
+
+            # Calculate derived metrics
+            save_percentage = (total_income - total_expense) / total_income * 100 if total_income > 0 else 0.0
+            daily_average_expense = total_expense / days if days > 0 else 0.0
 
             return {
                 "total_income": total_income,

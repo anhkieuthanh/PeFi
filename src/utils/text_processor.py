@@ -51,7 +51,7 @@ def parse_text_for_info(raw_text: str) -> Dict[str, Any]:
             logger.error("No response from Gemini after retries")
             return {"raw": "Invalid"}
         result_str = response.text if response.text else ""
-        logger.info(f"Gemini text response: {result_str[:500]}")  # Log first 500 chars
+        logger.info(f"Gemini text response: {result_str[:200]}...")  # Log first 200 chars
 
         if not result_str or not result_str.strip():
             logger.warning("Gemini returned empty response")
@@ -85,7 +85,7 @@ def parse_text_for_info(raw_text: str) -> Dict[str, Any]:
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Gemini response as JSON: {e}")
-        logger.error(f"Raw response was: {result_str[:500]}")
+        logger.error(f"Raw response was: {result_str[:200]}...")
         return {"raw": "Invalid"}
     except Exception as e:
         logger.exception(f"Error in parse_text_for_info: {e}")
@@ -188,7 +188,7 @@ def classify_user_intent(raw_text: str) -> Dict[str, Any]:
             return {"intent": intent, "confidence": confidence, "explanation": explanation}
         except json.JSONDecodeError:
             logger.warning("Failed to parse Gemini classification response as JSON; returning 'unclear'")
-            logger.debug(f"Raw classifier output: {result_str[:500]}")
+            logger.debug(f"Raw classifier output: {result_str[:200]}...")
             return {"intent": "unclear", "confidence": 0.0, "explanation": "invalid json from classifier"}
     except Exception as e:
         logger.exception(f"Error in classify_user_intent: {e}")
@@ -476,22 +476,8 @@ def gemini_parse_report_request(raw_text: str) -> Dict[str, Any]:
         return {}
 
 
-def run_report_query(user_id: int, start_date: str = None, end_date: str = None, tx_type: str = "both") -> Dict[str, Any]:
-    """Build and execute SQL queries to compute aggregates from DB based on parameters.
-
-    Returns same shape as get_transactions_summary.
-    """
-    # Delegator to the canonical DB helper in database/db_operations.
-    try:
-        try:
-            from database.db_operations import get_transactions_summary as db_get_summary
-        except Exception:
-            from src.database.db_operations import get_transactions_summary as db_get_summary
-
-        return db_get_summary(user_id, start_date, end_date, tx_type)
-    except Exception:
-        logger.exception("Error delegating run_report_query to central DB helper")
-        return {"error": "Database error when summarizing transactions"}
+# Removed run_report_query - it was just a wrapper around get_transactions_summary
+# Use get_transactions_summary directly from database.db_operations instead
 def generate_report_from_gemini_and_db(raw_text: str, user_id: int, use_gemini_writer: bool = False) -> Dict[str, Any]:
     """High-level helper: use Gemini to extract params, query DB, and build a report text.
 

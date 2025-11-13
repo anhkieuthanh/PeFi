@@ -86,20 +86,30 @@ def _ensure_genai_configured():
     _genai_configured = True
 
 
-# ---- Gemini model helpers ----
+# ---- Gemini model helpers with caching ----
+_text_model = None
+_vision_model = None
+
+
 def get_text_model(model_name: str = "gemini-2.5-flash"):
-    """Return a configured text-capable GenerativeModel.
+    """Return a cached text-capable GenerativeModel.
 
     Default model is fast and supports text I/O.
     """
-    _ensure_genai_configured()
-    return genai.GenerativeModel(model_name)
+    global _text_model
+    if _text_model is None:
+        _ensure_genai_configured()
+        _text_model = genai.GenerativeModel(model_name)
+    return _text_model
 
 
 def get_vision_model(model_name: str = "gemini-2.5-flash"):
-    """Return a configured multimodal GenerativeModel for image+text prompts."""
-    _ensure_genai_configured()
-    return genai.GenerativeModel(model_name)
+    """Return a cached multimodal GenerativeModel for image+text prompts."""
+    global _vision_model
+    if _vision_model is None:
+        _ensure_genai_configured()
+        _vision_model = genai.GenerativeModel(model_name)
+    return _vision_model
 
 
 # --- DATABASE ---

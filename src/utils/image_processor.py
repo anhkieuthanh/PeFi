@@ -66,7 +66,7 @@ def extract_text(file_path: str) -> Dict[str, Any]:
             logger.error("No response from Gemini after retries")
             return {"raw": "Invalid"}
         result_str = response.text if response.text else ""
-        logger.info(f"Gemini vision response: {result_str[:500]}")  # Log first 500 chars
+        logger.info(f"Gemini vision response: {result_str[:200]}...")  # Log first 200 chars
 
         if not result_str or not result_str.strip():
             logger.warning("Gemini returned empty response")
@@ -100,7 +100,7 @@ def extract_text(file_path: str) -> Dict[str, Any]:
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Gemini response as JSON: {e}")
-        logger.error(f"Raw response was: {result_str[:500]}")
+        logger.error(f"Raw response was: {result_str[:200]}...")
         return {"raw": "Invalid"}
     except Exception as e:
         logger.exception(f"Error in extract_text: {e}")

@@ -1,4 +1,5 @@
 import sys
+import atexit
 from pathlib import Path
 import psycopg2
 from psycopg2 import OperationalError
@@ -7,6 +8,21 @@ from contextlib import contextmanager
 
 # Module-level connection pool (initialized lazily)
 _POOL = None
+
+
+def close_pool():
+    """Close the connection pool on shutdown."""
+    global _POOL
+    if _POOL:
+        try:
+            _POOL.closeall()
+        except Exception:
+            pass
+        _POOL = None
+
+
+# Register cleanup on exit
+atexit.register(close_pool)
 
 @contextmanager
 def connect_to_heroku_db():

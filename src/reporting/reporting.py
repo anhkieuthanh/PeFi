@@ -19,11 +19,6 @@ logging.basicConfig(level=logging.INFO)
 
 
 def get_summary(user_id: int, start_date: Optional[str], end_date: Optional[str], tx_type: str = "both") -> Dict[str, Any]:
-    """Delegate to central DB helper in `database.db_operations` which is the single
-    source of truth for SQL queries. This keeps DB code consolidated.
-
-    Returns the same shape as the previous local implementation (includes per_category).
-    """
     try:
         # import lazily to avoid import-time DB initialization
         try:
@@ -45,208 +40,116 @@ def get_summary(user_id: int, start_date: Optional[str], end_date: Optional[str]
 
 
 def generate_report(summary: Dict[str, Any], period_text: str = "", tx_type: str = "both") -> Dict[str, Any]:
-    """Send the aggregated summary to Gemini to generate a short Vietnamese report.
+    # Build JSON context for the LLM. Also try to extract explicit start/end dates
+    # from the period_text if available (format like 'YYYY-MM-DD đến YYYY-MM-DD').
+    start_date = ""
+    end_date = ""
+    try:
+        if isinstance(period_text, str) and "đến" in period_text:
+            parts = [p.strip() for p in period_text.split("đến", 1)]
+            if len(parts) == 2:
+                start_date, end_date = parts[0], parts[1]
+    except Exception:
+        start_date = ""
+        end_date = ""
 
-    IMPORTANT: The prompt instructs the LLM to NOT perform calculations. It must use the numbers
-    provided in the JSON context. The LLM's job is only to produce human-friendly text.
-    """
-    # Build JSON context for the LLM
+    top_cat = summary.get("top_category") or {}
+    top_cat_name = top_cat.get("category_name") if isinstance(top_cat, dict) else str(top_cat)
+    top_cat_amount = top_cat.get("total") if isinstance(top_cat, dict) else None
+
     context = {
         "period": period_text,
+        "start_date": start_date,
+        "end_date": end_date,
         "total_income": summary.get("total_income", 0.0),
         "total_expense": summary.get("total_expense", 0.0),
         "transaction_count": summary.get("transaction_count", 0),
-        "top_category": summary.get("top_category"),
+        "top_category": top_cat_name,
+        "top_category_amount": top_cat_amount,
+        "save_percentage": summary.get("save_percentage", 0.0),
+        "daily_average_expense": summary.get("daily_average_expense", 0.0),
     }
 
-    # Templates for the three report types. These are examples the LLM should follow
-    # depending on tx_type: 'thu', 'chi', or 'both'. The prompt below instructs the
-    # LLM to use the appropriate template and to NOT invent or change numbers.
-    TEMPLATE_THA = (
-        "# Báo cáo thu\n\n"
-        "**Tóm tắt nhanh:** Trong kỳ, tổng thu là `{total_income} VND`.\n\n"
-        "**Số liệu chính:**\n"
-        "- Tổng thu: `{total_income} VND`\n"
-        "- Số giao dịch thu: `{transaction_count} (thu)`\n\n"
-        "**Top nguồn thu:**\n"
-        "1. `{top_category}` — `{top_amount} VND`\n\n"
-        "**Nhận xét và khuyến nghị:**\n"
-        "- Đề xuất tối ưu hóa nguồn thu."
-    )
-
-    TEMPLATE_CHI = (
-        "# Báo cáo chi\n\n"
-        "**Tóm tắt nhanh:** Trong kỳ, tổng chi là `{total_expense} VND`.\n\n"
-        "**Số liệu chính:**\n"
-        "- Tổng chi: `{total_expense} VND`\n"
-        "- Số giao dịch chi: `{transaction_count} (chi)`\n\n"
-        "**Top danh mục chi tiêu:**\n"
-        "1. `{top_category}` — `{top_amount} VND`\n\n"
-        "**Nhận xét và khuyến nghị:**\n"
-        "- Rà soát danh mục chi lớn để cắt giảm nếu cần."
-    )
-
-    TEMPLATE_BOTH = (
-        "# Báo cáo thu & chi\n\n"
-        "**Tóm tắt nhanh:** Tổng thu `{total_income} VND`, tổng chi `{total_expense} VND`.\n\n"
-        "**Số liệu chính:**\n"
-        "- Tổng thu: `{total_income} VND`\n"
-        "- Tổng chi: `{total_expense} VND`\n"
-        "- Số giao dịch: `{transaction_count}`\n\n"
-        "**Top danh mục chi tiêu:**\n"
-        "1. `{top_category}` — `{top_amount} VND`\n\n"
-        "**Nhận xét và khuyến nghị:**\n"
-        "- Đưa ra đề xuất cân bằng thu/chi."
-    )
-
-    # Compose prompt that asks the LLM to generate a rich, Markdown-formatted report.
-    # Important constraints:
-    #  - USE the numeric values in the JSON only. Do NOT recompute, modify, or infer new numbers.
-    #  - Produce a professional, reader-friendly report in Vietnamese using Markdown.
-    #  - Include: title, totals, a top-3 category table or list, ASCII bar chart visualization, short observations, and 1-2 actionable recommendations.
-    #  - Keep numeric values exactly as provided (no rounding changes) and append 'VND'.
-    # Choose template fragment to include in the prompt
-    template_fragment = TEMPLATE_BOTH
-    if tx_type == "thu":
-        template_fragment = TEMPLATE_THA
-    elif tx_type == "chi":
-        template_fragment = TEMPLATE_CHI
-
-    # Load the report-generation prompt template from prompts/report_generation.txt.
-    # The file contains placeholders {INPUT_JSON} and {TEMPLATE_FRAGMENT} which we'll fill.
+    # Load prompt template and provide both placeholders used in the file.
     try:
         prompt_template = read_promt_file(get_prompt_path("report_generation.txt"))
+    except Exception:
+        # fallback simple template
+        prompt_template = (
+            "INPUT JSON:\n{INPUT_JSON}\n\n{TEMPLATE_FRAGMENT}\n\nProduce a concise Markdown report in Vietnamese."
+        )
+
+    # Provide a small template fragment depending on tx_type if needed; keep empty otherwise.
+    template_fragment = ""
+    if tx_type == "thu":
+        template_fragment = "# Báo cáo thu"
+    elif tx_type == "chi":
+        template_fragment = "# Báo cáo chi"
+
+    try:
         prompt = prompt_template.format(INPUT_JSON=json.dumps(context, ensure_ascii=False), TEMPLATE_FRAGMENT=template_fragment)
     except Exception:
-        # Fallback to inline composition if reading templated file fails
-        prompt = (
-            "You are an expert Vietnamese financial-report writer and formatter.\n\n"
-            "CONSTRAINTS:\n"
-            "- Use ONLY the numeric values in the JSON context. Do NOT change, recompute, or summarize the numbers beyond showing them.\n"
-            "- Output MUST be valid Markdown. Use headings, bullet lists, and a small ASCII bar chart for top categories.\n"
-            "- Keep the language professional and concise. Aim for clarity and visual readability on messaging apps.\n\n"
-        "INPUT JSON:\n"
-        + json.dumps(context, ensure_ascii=False)
-        + "\n\n"
-        "Use this TEMPLATE as an exact formatting guideline (fill placeholders with values from JSON):\n\n"
-        + template_fragment
-            + "\n\nTASK:\n"
-        "Produce a Markdown report in Vietnamese with these sections:\n"
-        "1) H1 title with the period.\n"
-        "2) A short 'Tóm tắt nhanh' paragraph (1-2 sentences) using the provided numbers only.\n"
-        "3) A 'Số liệu chính' bullet list showing Tổng thu, Tổng chi, Số giao dịch (use exact values and append 'VND' where relevant).\n"
-        "4) 'Top 3 danh mục' section: show a compact table or numbered list with category name, amount, and an ASCII bar (max width ~20).\n"
-        "5) 'Nhận xét và khuyến nghị' 1-3 short bullet points (insightful, actionable).\n"
-        "6) Keep total output length reasonably short (not more than ~800 characters), but prefer clarity over strict brevity.\n\n"
-        "IMPORTANT: Under no circumstances should you invent additional numeric values or modify the provided numbers. If a value is 0, display '0 VND'.\n\n"
-        "Now output only the Markdown report (no extra commentary)."
-        )
+        # If formatting fails, fallback to injecting only the JSON
+        prompt = prompt_template.replace("{INPUT_JSON}", json.dumps(context, ensure_ascii=False))
 
     # Use project's Gemini model helper
     model = config.get_text_model()
-
-    def _fmt_amount(x):
-        try:
-            return f"{int(round(x)):,} VND" if x is not None else "0 VND"
-        except Exception:
-            try:
-                return f"{float(x):,.0f} VND"
-            except Exception:
-                return str(x)
-
-    def _make_bar(value, max_value, width=20):
-        try:
-            if max_value <= 0:
-                return ""
-            ratio = float(value) / float(max_value)
-            filled = int(round(ratio * width))
-            return "█" * filled + "░" * (width - filled)
-        except Exception:
-            return ""
-
-    def _format_summary_visual(summary: Dict[str, Any], period_text: str) -> str:
-        ti = summary.get("total_income", 0.0) or 0.0
-        te = summary.get("total_expense", 0.0) or 0.0
-        tx_count = summary.get("transaction_count", 0) or 0
-        per_cat = summary.get("per_category") or []
-        top_cat = summary.get("top_category")
-
-        lines = []
-        lines.append(f"📊 BÁO CÁO TÀI CHÍNH — {period_text or 'N/A'}")
-        lines.append("")
-        lines.append(f"• Tổng thu: {_fmt_amount(ti)}")
-        lines.append(f"• Tổng chi: {_fmt_amount(te)}")
-        lines.append(f"• Số giao dịch: {tx_count}")
-        lines.append("")
-
-        # Top categories visualization
-        if per_cat:
-            lines.append("Phân bổ theo danh mục (top 3):")
-            top3 = per_cat[:3]
-            max_val = top3[0]["total"] if top3 else 0
-            for idx, c in enumerate(top3, start=1):
-                name = c.get("category_name")
-                val = c.get("total", 0)
-                pct = (val / (te if te > 0 else (ti + te or 1))) * 100 if (ti + te) > 0 else 0
-                bar = _make_bar(val, max_val, width=20)
-                lines.append(f"{idx}. {name}: {_fmt_amount(val)} | {bar} {pct:.0f}%")
-            lines.append("")
-
-        if top_cat:
-            lines.append(f"Danh mục nhiều nhất: {top_cat.get('category_name')} — {_fmt_amount(top_cat.get('total'))}")
-        else:
-            lines.append("Không có danh mục nổi bật.")
-
-        # Simple deterministic observation
-        if tx_count == 0:
-            lines.append("")
-            lines.append("Không có giao dịch phát sinh trong kỳ.")
-        else:
-            lines.append("")
-            # expense ratio
-            total = ti + te
-            if total > 0:
-                expense_ratio = (te / total) * 100
-                lines.append(f"Tỷ lệ chi so với tổng: {expense_ratio:.0f}%.")
-                if expense_ratio > 70:
-                    lines.append("Khuyến nghị: Chi tiêu cao trong kỳ — cân nhắc cắt giảm các khoản không thiết yếu.")
-                elif expense_ratio < 30 and ti > 0:
-                    lines.append("Khuyến nghị: Tỉ lệ tiết kiệm tốt — tiếp tục duy trì.")
-            else:
-                lines.append("Không có dữ liệu tài chính hữu ích để phân tích.")
-
-        lines.append("")
-        lines.append("— Kết thúc báo cáo —")
-        return "\n".join(lines)
 
     # Try LLM generation with one retry and increased timeout on failure.
     generation_config = {"temperature": 0.2}
     try:
         resp = model.generate_content([prompt], generation_config=generation_config, request_options={"timeout": 20})
         text = getattr(resp, "text", "").strip()
-        # Strip code fences
-        if text.startswith("```"):
-            text = text.strip("`\n ")
-        visual = _format_summary_visual(summary, period_text)
-        full_text = text + "\n\n" + visual
-        return {"text": full_text, "used_fallback": False}
-    except Exception as e:
-        logger.warning("LLM generation failed on first attempt: %s. Retrying with longer timeout...", e)
-        try:
-            resp = model.generate_content([prompt], generation_config=generation_config, request_options={"timeout": 60})
-            text = getattr(resp, "text", "").strip()
-            if text.startswith("```"):
-                text = text.strip("`\n ")
-            visual = _format_summary_visual(summary, period_text)
-            full_text = text + "\n\n" + visual
-            return {"text": full_text, "used_fallback": False}
-        except Exception as e2:
-            logger.exception("LLM error while generating report (retry failed): %s", e2)
-            # Fallback: deterministic template with a short user-visible note
-            visual = _format_summary_visual(summary, period_text)
-            note = "(Lưu ý: trình tạo ngôn ngữ không phản hồi, gửi báo cáo dạng văn bản cơ bản.)"
-            return {"text": visual + "\n\n" + note, "used_fallback": True}
+        return {"text": text, "used_fallback": False}
+    except Exception:
+        logger.exception("LLM generation failed; falling back to deterministic report")
 
+    # Fallback deterministic report (basic Markdown) with two algorithmic tips
+    ti = context.get("total_income", 0.0) or 0.0
+    te = context.get("total_expense", 0.0) or 0.0
+    tx_count = context.get("transaction_count", 0) or 0
+    save_pct = context.get("save_percentage", 0.0) or 0.0
+    daily_avg = context.get("daily_average_expense", 0.0) or 0.0
+    
+    lines = []
+    lines.append(f"# Báo cáo tài chính — {context.get('period') or 'N/A'}")
+    lines.append("")
+    lines.append(f"- Tổng thu: {int(ti):,} VND")
+    lines.append(f"- Tổng chi: {int(te):,} VND")
+    lines.append(f"- Chênh lệch: {int(ti - te):,} VND")
+    lines.append(f"- Số giao dịch: {tx_count}")
+    lines.append(f"- Tỉ lệ tiết kiệm: {int(save_pct)}%")
+    lines.append(f"- Trung bình chi/ngày: {int(daily_avg):,} VND")
+    
+    if top_cat_name:
+        if top_cat_amount:
+            lines.append(f"- Danh mục nhiều nhất: {top_cat_name} — {int(top_cat_amount):,} VND")
+        else:
+            lines.append(f"- Danh mục nhiều nhất: {top_cat_name}")
+
+    # Simple heuristic tips
+    tips = []
+    total = ti + te
+    if total > 0:
+        if save_pct < 10:
+            tips.append("• Xem xét giảm các khoản chi không thiết yếu để tăng tỉ lệ tiết kiệm; bắt đầu bằng việc đặt giới hạn cho danh mục chi lớn.")
+        else:
+            tips.append("• Duy trì thói quen tiết kiệm hiện tại và cân nhắc tự động chuyển một phần tiền sang quỹ tiết kiệm hàng tháng.")
+    else:
+        tips.append("• Không đủ dữ liệu tài chính để đưa ra khuyến nghị cụ thể. Hãy ghi chép thêm giao dịch để có phân tích chính xác hơn.")
+
+    # second tip: if a single category dominates
+    if top_cat_amount and te > 0 and (top_cat_amount / te) > 0.5:
+        tips.append(f"• Danh mục '{top_cat_name}' chiếm phần lớn chi tiêu; xem xét rà soát và cắt giảm các khoản trong danh mục này.")
+    else:
+        tips.append("• Theo dõi chi tiêu đều đặn hàng tuần để phát hiện biến động và điều chỉnh kịp thời.")
+
+    lines.append("")
+    lines.append("## Lời khuyên")
+    for t in tips[:2]:
+        lines.append(t)  # Tips already have bullets
+
+    return {"text": "\n".join(lines), "used_fallback": True}
 
 if __name__ == "__main__":
     # Example usage
