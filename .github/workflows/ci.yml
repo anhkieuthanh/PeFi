@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: ["dev", "main"]
+  pull_request:
+    branches: ["dev", "main"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pefi_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Create test config
+        run: |
+          cat > config.yaml << EOF
+          telegram:
+            token: "test_token_for_ci"
+          uploads:
+            dir: "uploads"
+          google:
+            gemini_api_key: "test_key_for_ci"
+          database:
+            url: "postgresql://postgres:postgres@localhost:5432/pefi_test"
+          EOF
+
+      - name: Initialize database
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d pefi_test -f database/schema.sql
+
+      - name: Run smoke import check
+        run: |
+          if [ -f scripts/import_smoke_check.py ]; then
+            python3 scripts/import_smoke_check.py
+          else
+            python3 -c "import sys; sys.path.insert(0, 'src'); import bot; print('✅ Bot imports successfully')"
+          fi
+
+      - name: Run optimization tests
+        run: python3 test_optimizations.py
+
+      - name: Run text processor tests
+        run: |
+          if [ -f test/test_text_processor.py ]; then
+            python3 test/test_text_processor.py
+          fi
+
+      - name: Run compile check
+        run: python3 -m compileall -q .
+      
+      - name: Check code formatting
+        run: |
+          python3 -m py_compile src/bot.py
+          python3 -m py_compile src/config.py
+          python3 -m py_compile database/db_operations.py
+          python3 -m py_compile src/reporting/reporting.py

@@ -4,7 +4,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
 from config import TOKEN, initialize_directories
-from utils.telegram_handlers import insights_handler, photo_handler, summary_handler, text_handler
+from utils.telegram_handlers import photo_handler, text_handler
 from utils.voice_handlers import voice_handler
 
 # Configure logging to see debug output
@@ -30,11 +30,6 @@ def main() -> None:
     # Trình xử lí cho tin nhắn văn bản
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), text_handler))
 
-    # Lệnh tạo insights bằng LLM local
-    application.add_handler(CommandHandler("insights", insights_handler))
-    # Lệnh tóm tắt nhanh không dùng LLM
-    application.add_handler(CommandHandler("summary", summary_handler))
-    #
     application.add_handler(MessageHandler(filters.VOICE, voice_handler))
     # Bắt đầu chạy bot
     print("Bot đang chạy...")

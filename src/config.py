@@ -86,20 +86,30 @@ def _ensure_genai_configured():
     _genai_configured = True
 
 
-# ---- Gemini model helpers ----
+# ---- Gemini model helpers with caching ----
+_text_model = None
+_vision_model = None
+
+
 def get_text_model(model_name: str = "gemini-2.5-flash"):
-    """Return a configured text-capable GenerativeModel.
+    """Return a cached text-capable GenerativeModel.
 
     Default model is fast and supports text I/O.
     """
-    _ensure_genai_configured()
-    return genai.GenerativeModel(model_name)
+    global _text_model
+    if _text_model is None:
+        _ensure_genai_configured()
+        _text_model = genai.GenerativeModel(model_name)
+    return _text_model
 
 
 def get_vision_model(model_name: str = "gemini-2.5-flash"):
-    """Return a configured multimodal GenerativeModel for image+text prompts."""
-    _ensure_genai_configured()
-    return genai.GenerativeModel(model_name)
+    """Return a cached multimodal GenerativeModel for image+text prompts."""
+    global _vision_model
+    if _vision_model is None:
+        _ensure_genai_configured()
+        _vision_model = genai.GenerativeModel(model_name)
+    return _vision_model
 
 
 # --- DATABASE ---
@@ -124,3 +134,12 @@ try:
     LLM_DEFAULT_TIMEOUT = int(_get("llm.default_timeout", default=120))
 except Exception:
     LLM_DEFAULT_TIMEOUT = 120
+
+
+# Default user id to use when a request cannot be mapped to a DB user.
+# This can be overridden in config.yaml under `app.default_user_id` if desired,
+# but will fall back to 2 to match the project's current test/default behavior.
+try:
+    DEFAULT_USER_ID = int(_get("app.default_user_id", default=2))
+except Exception:
+    DEFAULT_USER_ID = 2

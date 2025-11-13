@@ -10,6 +10,8 @@ def get_session() -> requests.Session:
     global _SESSION
     if _SESSION is None:
         session = requests.Session()
+        # Add User-Agent header
+        session.headers.update({"User-Agent": "PeFi-Bot/1.0"})
         # Retry on transient errors for idempotent methods
         retries = Retry(total=3, backoff_factor=0.5, status_forcelist=(500, 502, 503, 504))
         adapter = HTTPAdapter(max_retries=retries)
