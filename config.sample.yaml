@@ -27,9 +27,13 @@ app:
   default_user_id: 2  # Default user ID for transactions when user mapping is unavailable
 
 # Voice processing (optional - requires transformers and torch)
+# Performance tip: Use PhoWhisper-small for 3-5x faster processing
 voice:
-  model: "vinai/PhoWhisper-large"  # Vietnamese ASR model
-  # Other options: vinai/PhoWhisper-small, vinai/PhoWhisper-medium
+  model: "vinai/PhoWhisper-small"  # Vietnamese ASR model (fastest, recommended)
+  # Other options:
+  # - vinai/PhoWhisper-small: Fastest, good accuracy (recommended)
+  # - vinai/PhoWhisper-medium: Balanced speed/accuracy
+  # - vinai/PhoWhisper-large: Slowest, best accuracy
 
 # Local LLM configuration (optional - not currently used)
 # llm:

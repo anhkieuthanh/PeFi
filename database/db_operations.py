@@ -195,7 +195,7 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
             ),
             top_cat AS (
                 SELECT category_name, SUM(total_amount) AS total
-                FROM bills WHERE {where_clause}
+                FROM bills WHERE {where_clause} AND category_type::text <> '1'
                 GROUP BY category_name ORDER BY total DESC LIMIT 1
             )
             SELECT 
@@ -233,9 +233,10 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
                 top_category = {"category_name": row[7], "total": float(row[8])}
             
             # Per-category breakdown (separate query since it returns multiple rows)
+            # Only include expenses (category_type <> '1') for expense breakdown
             sql_per_cat = f"""
                 SELECT category_name, SUM(total_amount) AS total
-                FROM bills WHERE {where_clause}
+                FROM bills WHERE {where_clause} AND category_type::text <> '1'
                 GROUP BY category_name ORDER BY total DESC LIMIT 10
             """
             cursor.execute(sql_per_cat, params)
@@ -247,7 +248,13 @@ def get_transactions_summary(user_id: int = 2, start_date: Optional[str] = None,
             cursor.close()
 
             # Calculate derived metrics
-            save_percentage = (total_income - total_expense) / total_income * 100 if total_income > 0 else 0.0
+            # Save percentage: (income - expense) / income * 100, but never negative (min 0%)
+            if total_income > 0:
+                save_percentage = (total_income - total_expense) / total_income * 100
+                save_percentage = max(0.0, save_percentage)  # Ensure non-negative
+            else:
+                save_percentage = 0.0
+            
             daily_average_expense = total_expense / days if days > 0 else 0.0
 
             return {

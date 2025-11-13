@@ -62,6 +62,9 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     chat_id = update.message.chat_id
     file_path: Optional[str] = None
+    
+    import time
+    start_time = time.time()
 
     try:
         await context.bot.send_message(chat_id=chat_id, text="Đã nhận được thông tin đang xử lý...")
@@ -96,6 +99,9 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Save directly to database
         result = add_bill(payload)
 
+        elapsed_time = time.time() - start_time
+        logger.info(f"✅ Image processing completed in {elapsed_time:.2f}s")
+
         if result.get("success"):
             transaction_info = result.get("transaction_info", "Đã lưu giao dịch thành công")
             await context.bot.send_message(chat_id=chat_id, text=transaction_info)
@@ -105,6 +111,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi: {error_msg}")
 
     except Exception as e:
+        elapsed_time = time.time() - start_time
+        logger.error(f"❌ Image processing failed after {elapsed_time:.2f}s")
         logger.exception("Lỗi trong photo_handler")
         await context.bot.send_message(chat_id=chat_id, text=f"Đã có lỗi xảy ra: {e}")
 
@@ -124,6 +132,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     user_text = update.message.text
     chat_id = update.message.chat_id
+    
+    import time
+    start_time = time.time()
 
     try:
         await context.bot.send_message(chat_id=chat_id, text="Đã nhận được thông tin đang xử lý...")
@@ -188,13 +199,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
                 # Generate natural language report via LLM (in thread)
                 period_text = report_req.get("raw_period_text") or f"{start} đến {end}"
-                report_resp = await asyncio.to_thread(generate_report, summary, period_text)
+                report_resp = await asyncio.to_thread(generate_report, summary, period_text, typ, start, end)
+                
+                elapsed_time = time.time() - start_time
+                logger.info(f"✅ Report generation completed in {elapsed_time:.2f}s")
+                
                 # report_resp is a dict {text, used_fallback}
                 if isinstance(report_resp, dict):
                     text = str(report_resp.get("text") or "")
-                    # Print and log the report before sending
-                    logger.info("Report to send: %s", text)
-                    print("REPORT_TO_SEND:", text)
                     # Send as Markdown so the LLM's formatting is rendered
                     try:
                         await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
@@ -207,8 +219,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 else:
                     # backward compatibility: plain string
                     rpt = str(report_resp)
-                    logger.info("Report to send (plain): %s", rpt)
-                    print("REPORT_TO_SEND:", rpt)
                     await context.bot.send_message(chat_id=chat_id, text=rpt)
                 return
 
@@ -229,6 +239,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 payload["user_id"] = getattr(_cfg, "DEFAULT_USER_ID", 2)
 
             result = add_bill(payload)
+            
+            elapsed_time = time.time() - start_time
+            logger.info(f"✅ Text processing completed in {elapsed_time:.2f}s")
+            
             if result.get("success"):
                 transaction_info = result.get("transaction_info", "Đã lưu giao dịch thành công")
                 await context.bot.send_message(chat_id=chat_id, text=transaction_info)
@@ -242,6 +256,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await context.bot.send_message(chat_id=chat_id, text=reply_text)
 
     except Exception:
+        elapsed_time = time.time() - start_time
+        logger.error(f"❌ Text processing failed after {elapsed_time:.2f}s")
         logger.exception("Đã xảy ra lỗi trong text_handler")
         await context.bot.send_message(
             chat_id=chat_id, text="🙁 Đã có lỗi xảy ra trong quá trình xử lý. Vui lòng thử lại sau."

@@ -39,19 +39,16 @@ def get_summary(user_id: int, start_date: Optional[str], end_date: Optional[str]
         return {"error": "Internal error while preparing summary"}
 
 
-def generate_report(summary: Dict[str, Any], period_text: str = "", tx_type: str = "both") -> Dict[str, Any]:
-    # Build JSON context for the LLM. Also try to extract explicit start/end dates
-    # from the period_text if available (format like 'YYYY-MM-DD đến YYYY-MM-DD').
-    start_date = ""
-    end_date = ""
-    try:
-        if isinstance(period_text, str) and "đến" in period_text:
-            parts = [p.strip() for p in period_text.split("đến", 1)]
-            if len(parts) == 2:
-                start_date, end_date = parts[0], parts[1]
-    except Exception:
-        start_date = ""
-        end_date = ""
+def generate_report(summary: Dict[str, Any], period_text: str = "", tx_type: str = "both", start_date: str = "", end_date: str = "") -> Dict[str, Any]:
+    # If start_date and end_date are not provided, try to extract from period_text
+    if not start_date or not end_date:
+        try:
+            if isinstance(period_text, str) and "đến" in period_text:
+                parts = [p.strip() for p in period_text.split("đến", 1)]
+                if len(parts) == 2:
+                    start_date, end_date = parts[0], parts[1]
+        except Exception:
+            pass
 
     top_cat = summary.get("top_category") or {}
     top_cat_name = top_cat.get("category_name") if isinstance(top_cat, dict) else str(top_cat)

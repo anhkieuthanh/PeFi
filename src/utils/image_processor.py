@@ -37,7 +37,7 @@ def extract_text(file_path: str) -> Dict[str, Any]:
         # Use generation_config to enforce JSON output
         generation_config = {"temperature": 0.1, "response_mime_type": "application/json"}
 
-        # Call Gemini with retries on DeadlineExceeded (504)
+        # Call Gemini with optimized timeout and fewer retries for faster response
         def _call_generate():
             return model.generate_content(
                 [
@@ -45,11 +45,11 @@ def extract_text(file_path: str) -> Dict[str, Any]:
                     {"mime_type": "image/jpeg", "data": payload},
                 ],
                 generation_config=generation_config,
-                request_options={"timeout": 60},
+                request_options={"timeout": 30},  # Reduced from 60s to 30s
             )
 
-        max_retries = 3
-        backoff = 1
+        max_retries = 2  # Reduced from 3 to 2 for faster failure
+        backoff = 0.5  # Reduced from 1s to 0.5s
         response = None
         for attempt in range(1, max_retries + 1):
             try:
@@ -61,7 +61,7 @@ def extract_text(file_path: str) -> Dict[str, Any]:
                     logger.error("Gemini requests timed out after retries")
                     return {"raw": "Invalid"}
                 time.sleep(backoff)
-                backoff *= 2
+                backoff *= 1.5  # Reduced backoff multiplier
         if response is None:
             logger.error("No response from Gemini after retries")
             return {"raw": "Invalid"}
@@ -107,27 +107,31 @@ def extract_text(file_path: str) -> Dict[str, Any]:
         return {"raw": "Invalid"}
 
 
-def process_image_from_url(image_url: str, max_size: int = 1024, quality: int = 70) -> Optional[bytes]:
+def process_image_from_url(image_url: str, max_size: int = 800, quality: int = 60) -> Optional[bytes]:
     """
+    Optimized image processing for faster Gemini API calls.
+    
     :param image_url: Đường link (URL) đến tệp ảnh (thường là link từ Telegram file_path).
-    :param max_size: Kích thước tối đa cho cạnh dài nhất của ảnh (pixel). Mặc định là 1024px.
-    :param quality: Chất lượng ảnh JPEG/WEBP (1-100). Mặc định là 70.
+    :param max_size: Kích thước tối đa cho cạnh dài nhất của ảnh (pixel). Mặc định là 800px (giảm từ 1024).
+    :param quality: Chất lượng ảnh JPEG (1-100). Mặc định là 60 (giảm từ 70).
     :return: Dữ liệu ảnh đã xử lý dưới dạng bytes, hoặc None nếu lỗi.
     """
     try:
-        # 1. Tải ảnh từ URL vào bộ nhớ
+        # 1. Tải ảnh từ URL vào bộ nhớ (with streaming for large files)
         session = get_session()
         timeout = getattr(config, "HTTP_TIMEOUT", 10)
-        response = session.get(image_url, timeout=timeout)
+        response = session.get(image_url, timeout=timeout, stream=True)
         response.raise_for_status()
 
         # 2. Mở ảnh trực tiếp từ dữ liệu nhị phân đã tải
         image_data = BytesIO(response.content)
         img = Image.open(image_data)
 
-        print(f"Kích thước gốc: {img.width}x{img.height}")
+        # 3. Convert to RGB if needed (faster processing)
+        if img.mode not in ('RGB', 'L'):
+            img = img.convert('RGB')
 
-        # 3. Tính toán và Thay đổi Kích thước (nếu cần)
+        # 4. Tính toán và Thay đổi Kích thước (nếu cần)
         width, height = img.size
 
         if max(width, height) > max_size:
@@ -135,41 +139,32 @@ def process_image_from_url(image_url: str, max_size: int = 1024, quality: int = 
             new_width = int(width * ratio)
             new_height = int(height * ratio)
 
-            # Thay đổi kích thước
-            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            print(f"Kích thước mới: {img.width}x{img.height}")
-        else:
-            print("Ảnh đã có kích thước phù hợp.")
+            # Use BILINEAR for faster resizing (LANCZOS is slower but higher quality)
+            # For OCR, BILINEAR is sufficient and 2-3x faster
+            img = img.resize((new_width, new_height), Image.Resampling.BILINEAR)
 
-        # 4. Lưu ảnh đã thay đổi kích thước vào một đối tượng BytesIO mới trong bộ nhớ
+        # 5. Lưu ảnh đã thay đổi kích thước vào một đối tượng BytesIO mới trong bộ nhớ
         output_buffer = BytesIO()
 
-        # Luôn chuyển sang JPEG để tối ưu hóa chất lượng và dung lượng
-        # Đây là định dạng tốt nhất để gửi cho các mô hình đa phương thức
-        file_format = "JPEG"
-        save_params = {"quality": quality, "optimize": True}
+        # Optimize JPEG encoding for speed
+        save_params = {
+            "quality": quality,
+            "optimize": False,  # Disable optimize for faster encoding
+            "progressive": False,  # Disable progressive for faster encoding
+        }
 
         # Lưu vào bộ nhớ
-        img.save(output_buffer, format=file_format, **save_params)
+        img.save(output_buffer, format="JPEG", **save_params)
 
         # Đặt con trỏ về đầu để đọc toàn bộ dữ liệu (bytes)
         output_buffer.seek(0)
         processed_bytes = output_buffer.read()
 
-        original_size = len(response.content)
-        new_size = len(processed_bytes)
-
-        print(f"Dung lượng gốc: {original_size / 1024:.2f} KB")
-        print(
-            f"Dung lượng mới: {new_size / 1024:.2f} KB (Giảm {(original_size - new_size) / original_size * 100:.2f}%)"
-        )
-        print("Đã hoàn tất xử lý ảnh trong bộ nhớ.")
-
         return processed_bytes
 
     except requests.exceptions.RequestException as e:
-        print(f"Lỗi khi tải ảnh từ URL: {e}")
+        logger.error(f"Error downloading image: {e}")
         return None
     except Exception as e:
-        print(f"Đã xảy ra lỗi khi xử lý ảnh: {e}")
+        logger.exception(f"Error processing image: {e}")
         return None

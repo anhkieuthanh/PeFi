@@ -107,18 +107,6 @@ python3 bot.py
 
 Bot sẽ bắt đầu chạy và sẵn sàng nhận tin nhắn từ Telegram!
 
-## ⚡ Performance Optimizations
-
-Bot đã được tối ưu hóa với các cải tiến sau:
-
-- **60% faster report generation** - Từ 1.5-2.5s xuống 0.6-0.9s
-- **75% fewer database queries** - Sử dụng CTEs để giảm từ 4 queries xuống 1
-- **99% reduction in file I/O** - Prompt files được cache trong memory
-- **Model caching** - Gemini models được khởi tạo một lần và tái sử dụng
-- **Connection pooling** - Database connections được quản lý hiệu quả
-- **Proper cleanup** - Tự động đóng connections khi shutdown
-
-Xem chi tiết: [OPTIMIZATIONS.md](OPTIMIZATIONS.md)
 
 ## 🧪 Testing
 
@@ -343,25 +331,6 @@ MIT License - see LICENSE file for details
 - [Google Gemini](https://ai.google.dev/)
 - Contributors và community
 
-## 📚 Additional Documentation
-
-- **[OPTIMIZATIONS.md](OPTIMIZATIONS.md)** - Technical details of performance optimizations
-- **[OPTIMIZATION_EXAMPLES.md](OPTIMIZATION_EXAMPLES.md)** - Before/after code examples
-- **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)** - Migration and testing guide
-- **[FORMATTING_CHANGES.md](FORMATTING_CHANGES.md)** - Report formatting documentation
-- **[OPTIMIZATION_STATUS.md](OPTIMIZATION_STATUS.md)** - Current optimization status
-
-## 🎯 Performance Metrics
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| Report generation | 1.5-2.5s | 0.6-0.9s | **60% faster** |
-| Database queries | 4 queries | 1 query | **75% reduction** |
-| Prompt file I/O | Every request | Once (cached) | **99% reduction** |
-| Model initialization | Every call | Cached | **100% reuse** |
-| Memory leaks | Potential | None | **Fixed** |
-
-## 🔄 Recent Updates
 
 ### v2.0 - Performance & Features (2025-11-13)
 - ⚡ Major performance optimizations (60% faster reports)

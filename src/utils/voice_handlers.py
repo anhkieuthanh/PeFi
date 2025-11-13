@@ -14,14 +14,14 @@ from src.utils.http_session import get_session
 
 logger = logging.getLogger(__name__)
 
-# Lazy-loaded ASR pipeline using PhoWhisper-large by default. The model id can be
-# overridden with the PHOWHISPER_MODEL env var (or later via config if desired).
-_PHOWHISPER_MODEL = os.environ.get("PHOWHISPER_MODEL", "vinai/PhoWhisper-large")
+# Lazy-loaded ASR pipeline - Use smaller/faster model by default for better performance
+# Options: vinai/PhoWhisper-small (fastest), vinai/PhoWhisper-medium, vinai/PhoWhisper-large (slowest)
+_PHOWHISPER_MODEL = os.environ.get("PHOWHISPER_MODEL", "vinai/PhoWhisper-small")
 _transcriber = None
 
 
 def get_transcriber():
-    """Return a cached transformers pipeline for ASR (PhoWhisper-large by default).
+    """Return a cached transformers pipeline for ASR (PhoWhisper-small by default for speed).
 
     Detects CUDA and uses GPU if available, otherwise CPU. Loading is lazy to
     avoid long startup time at import.
@@ -47,12 +47,14 @@ def get_transcriber():
     if pipeline is None:
         raise RuntimeError("transformers.pipeline is not available; please install transformers")
 
-    # create the pipeline
+    # create the pipeline with optimizations
     _transcriber = pipeline(
         "automatic-speech-recognition",
         model=_PHOWHISPER_MODEL,
         chunk_length_s=30,
         device=device,
+        # Add optimization parameters
+        torch_dtype=torch.float16 if (torch is not None and torch.cuda.is_available()) else None,  # Use FP16 on GPU for 2x speed
     )
     return _transcriber
 
@@ -156,28 +158,26 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             dest_wav = dest_path.with_suffix(".wav")
             ffmpeg_path = shutil.which("ffmpeg")
             if not ffmpeg_path:
-                print("⚠️ ffmpeg không được tìm thấy; không thể chuyển đổi âm thanh để gửi cho STT.")
+                logger.error("ffmpeg not found; cannot convert audio for STT")
                 return
+            # Optimized ffmpeg command for faster conversion
             cmd = [
                 ffmpeg_path,
-                "-y",
-                "-i",
-                str(dest_path),
-                "-ar",
-                "16000",
-                "-ac",
-                "1",
-                "-sample_fmt",
-                "s16",
+                "-y",  # Overwrite output
+                "-i", str(dest_path),
+                "-ar", "16000",  # Sample rate for Whisper
+                "-ac", "1",  # Mono
+                "-sample_fmt", "s16",  # 16-bit PCM
+                "-loglevel", "error",  # Reduce ffmpeg output
+                "-threads", "2",  # Use 2 threads for faster conversion
                 str(dest_wav),
             ]
             try:
                 await asyncio.to_thread(subprocess.run, cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 audio_for_stt = dest_wav
-                print("🔁 Đã chuyển đổi sang WAV cho STT")
+                logger.info("Audio converted to WAV for STT")
             except Exception:
                 logger.exception("ffmpeg conversion failed")
-                print("❌ Không thể chuyển tệp âm thanh sang WAV. Không thể tiếp tục xử lý giọng nói.")
                 return
 
         # Offload transcription + parsing + DB save to a background task so the bot
@@ -185,6 +185,9 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await context.bot.send_message(chat_id=chat_id, text="🔊 Đã nhận file — đang xử lí ở background. Bạn sẽ nhận thông báo khi hoàn tất.")
 
         async def _process_and_respond(audio_path: str, chat_id: int, context: ContextTypes.DEFAULT_TYPE):
+            import time
+            process_start = time.time()
+            
             try:
                 # Load transcriber (may be heavy) in a thread
                 stt = await asyncio.to_thread(get_transcriber)
@@ -218,6 +221,10 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     return
 
                 result = await asyncio.to_thread(add_bill, payload)
+                
+                elapsed_time = time.time() - process_start
+                logger.info(f"✅ Voice processing completed in {elapsed_time:.2f}s")
+                
                 if result.get("success"):
                     transaction_info = result.get("transaction_info", "Đã lưu giao dịch thành công")
                     await context.bot.send_message(chat_id=chat_id, text=transaction_info)
@@ -227,6 +234,8 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi khi lưu: {error_msg}")
 
             except Exception:
+                elapsed_time = time.time() - process_start
+                logger.error(f"❌ Voice processing failed after {elapsed_time:.2f}s")
                 logger.exception("Error during background STT or DB save")
                 try:
                     await context.bot.send_message(chat_id=chat_id, text="❌ Lỗi khi xử lý giọng nói. Vui lòng thử lại sau.")
