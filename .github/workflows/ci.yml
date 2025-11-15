@@ -67,14 +67,13 @@ jobs:
             python3 -c "import sys; sys.path.insert(0, 'src'); import bot; print('✅ Bot imports successfully')"
           fi
 
-      - name: Run optimization tests
-        run: python3 test_optimizations.py
-
-      - name: Run text processor tests
+      - name: Run tests with pytest
         run: |
-          if [ -f test/test_text_processor.py ]; then
-            python3 test/test_text_processor.py
-          fi
+          # Ensure pytest is installed (requirements may include it)
+          python3 -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          # Run the test suite but ignore llm-related tests that require external setup
+          PYTHONPATH=. pytest -q --ignore=test/test_llm.py
 
       - name: Run compile check
         run: python3 -m compileall -q .
