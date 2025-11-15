@@ -53,6 +53,7 @@ def get_transcriber():
         model=_PHOWHISPER_MODEL,
         chunk_length_s=30,
         device=device,
+        ignore_warning = True,
         # Add optimization parameters
         torch_dtype=torch.float16 if (torch is not None and torch.cuda.is_available()) else None,  # Use FP16 on GPU for 2x speed
     )
@@ -61,13 +62,13 @@ def get_transcriber():
 
 # Import helper functions (text parsing and DB) - guard for different run contexts
 try:
-    from .text_processor import parse_text_for_info
+    from .text_processor import parse_text_for_info, generate_user_response, extract_period_and_type, preprocess_text
 except Exception:
     # adjust sys.path and retry if running from repo root
     repo_root = Path(__file__).resolve().parents[2]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    from src.utils.text_processor import parse_text_for_info
+    from src.utils.text_processor import parse_text_for_info, generate_user_response, extract_period_and_type, preprocess_text
 
 try:
     from database.db_operations import add_bill
@@ -76,6 +77,15 @@ except Exception:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
     from database.db_operations import add_bill
+
+# Import reporting module for voice-based reports
+try:
+    from src.reporting.reporting import get_summary, generate_report
+except Exception:
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from src.reporting.reporting import get_summary, generate_report
 
 # Load upload dir from config when possible
 try:
@@ -214,24 +224,178 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     await context.bot.send_message(chat_id=chat_id, text="❌ Xử lí không thành công. Vui lòng thử lại.")
                     return
 
-                # Parse and save transaction (both blocking) in threads
-                payload = await asyncio.to_thread(parse_text_for_info, text_result)
-                if payload == {"raw": "Invalid"}:
-                    await context.bot.send_message(chat_id=chat_id, text="Văn bản không chứa thông tin giao dịch hợp lệ.")
+                logger.info(f"Voice transcribed: {text_result}")
+                
+                # Check if transcription is too short or unclear
+                if len(text_result.strip()) < 5:
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="🤔 Tôi không nghe rõ. Bạn có thể nói lại được không?\n\nGợi ý:\n• Nói rõ ràng hơn\n• Ghi âm ở nơi yên tĩnh\n• Hoặc gõ text thay vì voice"
+                    )
                     return
+                
+                # Classify intent using scoring system for better accuracy
+                norm = preprocess_text(text_result).lower()
+                
+                # Score-based classification
+                transaction_score = 0
+                report_score = 0
+                
+                # Transaction indicators (stronger signals)
+                transaction_keywords = [
+                    ("mua", 3), ("chi", 3), ("trả", 3), ("thanh toán", 3),
+                    ("chuyển khoản", 3), ("ck", 2), ("nạp", 2), ("rút", 2),
+                    ("gửi", 2), ("bán", 2), ("thu", 2), ("nhận", 2)
+                ]
+                for keyword, weight in transaction_keywords:
+                    if keyword in norm:
+                        transaction_score += weight
+                
+                # Check for amount (strong transaction signal)
+                import re
+                has_number = bool(re.search(r'\d+', norm))
+                has_currency = any(unit in norm for unit in ["nghìn", "triệu", "k", "đồng", "vnd"])
+                if has_number:
+                    transaction_score += 4
+                if has_currency:
+                    transaction_score += 2
+                
+                # Report indicators (stronger signals)
+                report_keywords = [
+                    ("tổng chi", 5), ("tổng thu", 5), ("tổng hợp", 5),
+                    ("báo cáo", 4), ("xem chi tiêu", 4), ("xem thu nhập", 4),
+                    ("thống kê", 3), ("tổng kết", 3), ("chi tiết", 2),
+                    ("tháng này", 2), ("tháng trước", 2), ("hôm nay", 1),
+                    ("tuần này", 2), ("năm nay", 2)
+                ]
+                for keyword, weight in report_keywords:
+                    if keyword in norm:
+                        report_score += weight
+                
+                # Penalty: if has report keywords, reduce transaction score
+                if report_score > 0:
+                    transaction_score = max(0, transaction_score - 2)
+                
+                # Penalty: if has transaction keywords, reduce report score slightly
+                if transaction_score > 0:
+                    report_score = max(0, report_score - 1)
+                
+                # Determine intent based on scores
+                TRANSACTION_THRESHOLD = 5
+                REPORT_THRESHOLD = 4
+                
+                is_transaction = transaction_score >= TRANSACTION_THRESHOLD
+                is_report_request = report_score >= REPORT_THRESHOLD
+                
+                logger.info(f"Intent scores - Transaction: {transaction_score}, Report: {report_score}")
+                
+                # Handle dual intent (both transaction and report)
+                if is_report_request and is_transaction:
+                    logger.info("Voice classified as: BOTH transaction and report")
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="📝 Tôi nghe thấy cả giao dịch VÀ yêu cầu báo cáo. Tôi sẽ xử lý cả hai nhé!"
+                    )
+                    
+                    # Process transaction first
+                    try:
+                        payload = await asyncio.to_thread(parse_text_for_info, text_result)
+                        if payload != {"raw": "Invalid"}:
+                            result = await asyncio.to_thread(add_bill, payload)
+                            if result.get("success"):
+                                transaction_info = result.get("transaction_info", "Đã lưu giao dịch")
+                                await context.bot.send_message(chat_id=chat_id, text=f"✅ Giao dịch:\n{transaction_info}")
+                            else:
+                                await context.bot.send_message(chat_id=chat_id, text="⚠️ Không thể lưu giao dịch, nhưng tôi sẽ tạo báo cáo.")
+                    except Exception as e:
+                        logger.exception("Error processing transaction in dual intent")
+                        await context.bot.send_message(chat_id=chat_id, text="⚠️ Lỗi khi lưu giao dịch, nhưng tôi sẽ tạo báo cáo.")
+                    
+                    # Then process report (code continues below)
+                    # Fall through to report processing
+                
+                # Process based on intent
+                if is_report_request:
+                    # Handle report request
+                    logger.info("Voice classified as: Report request")
+                    
+                    try:
+                        import config as _cfg
+                        user_id = getattr(_cfg, "DEFAULT_USER_ID", 2)
+                    except Exception:
+                        user_id = 2
+                    
+                    # Extract period from voice text
+                    report_req = extract_period_and_type(text_result)
+                    if not report_req:
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="Không thể hiểu yêu cầu báo cáo. Vui lòng nói rõ hơn, ví dụ:\n• 'Tổng hợp tháng này'\n• 'Báo cáo chi tiêu tháng 11'\n• 'Xem tổng thu tháng trước'"
+                        )
+                        return
+                    
+                    # Get data from database
+                    start = report_req.get("start_date")
+                    end = report_req.get("end_date")
+                    typ = report_req.get("type", "both")
+                    
+                    summary = await asyncio.to_thread(get_summary, user_id, start, end, typ)
+                    if not summary or summary.get("error"):
+                        err_text = "Lỗi khi truy vấn dữ liệu"
+                        if isinstance(summary, dict) and summary.get("error"):
+                            err_text = str(summary.get("error"))
+                        await context.bot.send_message(chat_id=chat_id, text=err_text)
+                        return
+                    
+                    # Generate report
+                    period_text = report_req.get("raw_period_text") or f"{start} đến {end}"
+                    report_resp = await asyncio.to_thread(generate_report, summary, period_text, typ, start, end)
+                    
+                    elapsed_time = time.time() - process_start
+                    logger.info(f"✅ Voice report generation completed in {elapsed_time:.2f}s")
+                    
+                    if isinstance(report_resp, dict):
+                        text = str(report_resp.get("text") or "")
+                        try:
+                            await context.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown")
+                        except Exception:
+                            await context.bot.send_message(chat_id=chat_id, text=text)
+                    else:
+                        await context.bot.send_message(chat_id=chat_id, text=str(report_resp))
+                
+                elif is_transaction:
+                    # Handle transaction recording only
+                    logger.info("Voice classified as: Transaction recording")
+                    
+                    payload = await asyncio.to_thread(parse_text_for_info, text_result)
+                    if payload == {"raw": "Invalid"}:
+                        # Ask user to clarify
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text="🤔 Tôi không hiểu rõ giao dịch này. Bạn có thể:\n\n1️⃣ Nói lại rõ hơn (ví dụ: 'Mua cafe năm mươi nghìn')\n2️⃣ Hoặc gõ text: 'Cafe 50k'"
+                        )
+                        return
 
-                result = await asyncio.to_thread(add_bill, payload)
+                    result = await asyncio.to_thread(add_bill, payload)
+                    
+                    elapsed_time = time.time() - process_start
+                    logger.info(f"✅ Voice transaction processing completed in {elapsed_time:.2f}s")
+                    
+                    if result.get("success"):
+                        transaction_info = result.get("transaction_info", "Đã lưu giao dịch thành công")
+                        await context.bot.send_message(chat_id=chat_id, text=transaction_info)
+                    else:
+                        error_msg = result.get("error", "Không thể lưu giao dịch")
+                        logger.error("Lỗi khi lưu bill từ giọng nói: %s", error_msg)
+                        await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi khi lưu: {error_msg}")
                 
-                elapsed_time = time.time() - process_start
-                logger.info(f"✅ Voice processing completed in {elapsed_time:.2f}s")
-                
-                if result.get("success"):
-                    transaction_info = result.get("transaction_info", "Đã lưu giao dịch thành công")
-                    await context.bot.send_message(chat_id=chat_id, text=transaction_info)
                 else:
-                    error_msg = result.get("error", "Không thể lưu giao dịch")
-                    logger.error("Lỗi khi lưu bill từ giọng nói: %s", error_msg)
-                    await context.bot.send_message(chat_id=chat_id, text=f"❌ Lỗi khi lưu: {error_msg}")
+                    # Unclear intent - ask user
+                    logger.info("Voice classified as: Unclear intent")
+                    await context.bot.send_message(
+                        chat_id=chat_id,
+                        text="🤔 Tôi không chắc bạn muốn làm gì. Bạn muốn:\n\n1️⃣ Ghi nhận giao dịch? (Nói: 'Mua cafe 50k')\n2️⃣ Xem báo cáo? (Nói: 'Tổng hợp tháng này')\n\nHoặc gõ text cho chính xác hơn!"
+                    )
 
             except Exception:
                 elapsed_time = time.time() - process_start
